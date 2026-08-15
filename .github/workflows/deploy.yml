@@ -36,7 +36,6 @@ jobs:
         run: |
           set -euo pipefail
           repo_lower="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-
           echo "backend=ghcr.io/${repo_lower}-backend" >> "$GITHUB_OUTPUT"
           echo "ai=ghcr.io/${repo_lower}-ai" >> "$GITHUB_OUTPUT"
 
@@ -50,7 +49,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push backend image (React + Spring Boot)
+      - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -85,166 +84,9 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-
-          # SSH key authentication
           key: ${{ secrets.SERVER_SSH_KEY }}
-
-          # Keep password fallback during initial deployment testing.
-          # After key authentication is fully verified in Actions,
-          # this line can be removed.
           password: ${{ secrets.SERVER_PASSWORD }}
-
           port: ${{ secrets.SERVER_PORT }}
           command_timeout: 20m
-
           script: |
-            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& {
-              $ErrorActionPreference = 'Stop'
-
-              # --------------------------------------------------------
-              # 1. Resolve server application path
-              # --------------------------------------------------------
-
-              $appPath = '${{ vars.SERVER_APP_PATH }}'
-
-              if ([string]::IsNullOrWhiteSpace($appPath)) {
-                $appPath = 'C:\home\dahum\app'
-              }
-
-              Write-Host ('Dahum application path: ' + $appPath)
-
-              if (-not (Test-Path -LiteralPath $appPath)) {
-                throw ('Dahum repository path not found: ' + $appPath)
-              }
-
-              Set-Location -LiteralPath $appPath
-
-
-              # --------------------------------------------------------
-              # 2. Verify that this is the correct Git repository
-              # --------------------------------------------------------
-
-              $expectedRepository = '${{ github.repository }}'
-
-              $origin = (git remote get-url origin).Trim()
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git remote get-url origin failed'
-              }
-
-              Write-Host ('Git origin: ' + $origin)
-
-              if ($origin -notmatch [regex]::Escape($expectedRepository)) {
-                throw (
-                  'Wrong repository at server path. Expected ' +
-                  $expectedRepository +
-                  ', found ' +
-                  $origin
-                )
-              }
-
-
-              # --------------------------------------------------------
-              # 3. Refuse deployment when server source has local edits
-              # --------------------------------------------------------
-
-              $dirty = @(git status --porcelain)
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git status failed'
-              }
-
-              if ($dirty.Count -gt 0) {
-                Write-Host 'Server repository has uncommitted changes:'
-                $dirty | ForEach-Object {
-                  Write-Host $_
-                }
-
-                throw 'Server repository has uncommitted changes'
-              }
-
-
-              # --------------------------------------------------------
-              # 4. Remember previous commit for image rollback
-              # --------------------------------------------------------
-
-              $previous = (git rev-parse HEAD).Trim()
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git rev-parse HEAD failed'
-              }
-
-              Write-Host ('Previous server commit: ' + $previous)
-
-
-              # --------------------------------------------------------
-              # 5. Update source repository
-              # --------------------------------------------------------
-
-              Write-Host 'Fetching latest main branch...'
-
-              git fetch --prune origin main
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git fetch failed'
-              }
-
-              git checkout main
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git checkout failed'
-              }
-
-              git pull --ff-only origin main
-
-              if ($LASTEXITCODE -ne 0) {
-                throw 'git pull failed'
-              }
-
-              $current = (git rev-parse HEAD).Trim()
-
-              Write-Host ('Current server commit: ' + $current)
-
-
-              # --------------------------------------------------------
-              # 6. Resolve immutable Docker image names
-              # --------------------------------------------------------
-
-              $backendImage = '${{ steps.images.outputs.backend }}:${{ github.sha }}'
-              $aiImage = '${{ steps.images.outputs.ai }}:${{ github.sha }}'
-
-              Write-Host ('Backend image: ' + $backendImage)
-              Write-Host ('AI image: ' + $aiImage)
-
-
-              # --------------------------------------------------------
-              # 7. Run the Windows deployment script
-              # --------------------------------------------------------
-
-              $deployScript = Join-Path $appPath 'deploy\scripts\deploy.ps1'
-
-              if (-not (Test-Path -LiteralPath $deployScript)) {
-                throw ('Deployment script not found: ' + $deployScript)
-              }
-
-              Write-Host 'Starting Dahum deployment...'
-
-              & $deployScript `
-                -SkipGitUpdate `
-                -BackendImage $backendImage `
-                -AiImage $aiImage `
-                -RegistryUser '${{ github.actor }}' `
-                -RegistryToken '${{ secrets.GITHUB_TOKEN }}' `
-                -RollbackCommit $previous
-
-              if ($LASTEXITCODE -ne 0) {
-                throw ('deploy.ps1 failed with exit code ' + $LASTEXITCODE)
-              }
-
-
-              # --------------------------------------------------------
-              # 8. Deployment completed
-              # --------------------------------------------------------
-
-              Write-Host 'Dahum deployment completed successfully.'
-            }"
+            cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout main && git pull --ff-only origin main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}"

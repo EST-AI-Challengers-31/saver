@@ -6,9 +6,9 @@ spring:
   application:
     name: dahum-backend
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mariadb://localhost:3306/dahum}
-    username: ${SPRING_DATASOURCE_USERNAME:dahum}
-    password: ${SPRING_DATASOURCE_PASSWORD:dahum}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.mariadb.jdbc.Driver
     hikari:
       initialization-fail-timeout: -1
@@ -25,5 +25,5 @@ management:
 
 dahum:
   ai:
-    base-url: ${AI_BASE_URL:http://localhost:8000}
-  public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
+    base-url: ${AI_BASE_URL}
+  public-base-url: ${PUBLIC_BASE_URL}

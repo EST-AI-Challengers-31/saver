@@ -1,0 +1,12 @@
+# Role: standalone React build verification image.
+# Production does NOT run this container separately; backend/Dockerfile builds React and bundles dist into Spring Boot.
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --no-audit --no-fund
+COPY . .
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

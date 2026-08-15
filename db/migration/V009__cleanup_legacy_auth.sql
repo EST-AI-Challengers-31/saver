@@ -1,0 +1,10 @@
+-- OPTIONAL CLEANUP. Run only after all legacy identities were migrated to oauth_identity.
+-- Do NOT execute this blindly on an existing DB.
+--
+-- Recommended verification before cleanup:
+-- 1) every active login has oauth_identity
+-- 2) login works with Kakao/Google
+-- 3) rollback backup exists
+--
+-- ALTER TABLE app_user DROP INDEX uq_app_user_external_auth_subject;
+-- ALTER TABLE app_user DROP COLUMN external_auth_subject;

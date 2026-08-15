@@ -1,0 +1,8 @@
+-- OPTIONAL FINALIZATION after owner_user_id has been backfilled for every family_group.
+-- Do NOT run before checking NULL count is zero.
+--
+-- SELECT COUNT(*) FROM family_group WHERE owner_user_id IS NULL;
+--
+-- ALTER TABLE family_group MODIFY owner_user_id CHAR(36) NOT NULL;
+-- ALTER TABLE family_group
+--   ADD CONSTRAINT fk_family_group_owner FOREIGN KEY (owner_user_id) REFERENCES app_user(id);

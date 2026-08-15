@@ -1,0 +1,29 @@
+server:
+  port: 8080
+  forward-headers-strategy: ${SERVER_FORWARD_HEADERS_STRATEGY:framework}
+
+spring:
+  application:
+    name: dahum-backend
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mariadb://localhost:3306/dahum}
+    username: ${SPRING_DATASOURCE_USERNAME:dahum}
+    password: ${SPRING_DATASOURCE_PASSWORD:dahum}
+    driver-class-name: org.mariadb.jdbc.Driver
+    hikari:
+      initialization-fail-timeout: -1
+      maximum-pool-size: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+dahum:
+  ai:
+    base-url: ${AI_BASE_URL:http://localhost:8000}
+  public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}

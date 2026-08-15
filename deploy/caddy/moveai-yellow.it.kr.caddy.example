@@ -1,0 +1,9 @@
+# This is what deploy/scripts/ensure_public_route.ps1 manages in C:\MOVEAI\Caddyfile.
+# It is shown here only for review/documentation.
+#
+# BEGIN DAHUM ROUTE - managed by Dahum deploy
+yellow.it.kr {
+    encode zstd gzip
+    reverse_proxy host.docker.internal:9000
+}
+# END DAHUM ROUTE - managed by Dahum deploy

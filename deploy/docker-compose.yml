@@ -1,0 +1,85 @@
+name: dahum
+
+services:
+  mariadb:
+    image: ${MARIADB_IMAGE}
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+    volumes:
+      - ${DAHUM_RUNTIME}/data/mariadb:/var/lib/mysql
+      - ../db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    networks:
+      - dahum_internal
+
+  ai:
+    image: ${AI_IMAGE:?AI_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      CLOVA_OCR_API_KEY: ${CLOVA_OCR_API_KEY}
+      LLM_API_KEY: ${LLM_API_KEY}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_INDEX: ${PINECONE_INDEX}
+      RAG_SIMILARITY_THRESHOLD: ${RAG_SIMILARITY_THRESHOLD}
+      RAG_TOP_K: ${RAG_TOP_K}
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+    networks:
+      - dahum_internal
+
+  backend:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      AI_BASE_URL: ${AI_BASE_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    expose:
+      - "8080"
+    networks:
+      - dahum_internal
+      - dahum_web
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${DAHUM_HOST_PORT}:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - dahum_web
+
+networks:
+  dahum_internal:
+  dahum_web:

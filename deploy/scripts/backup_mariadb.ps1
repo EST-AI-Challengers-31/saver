@@ -40,9 +40,9 @@ if (-not (Test-Path -LiteralPath $ComposePath)) {
 # ============================================================
 # 필수 DB 환경변수 확인
 #
-# 이 값들은 GitHub Actions
+# GitHub Actions
 # -> deploy.ps1
-# -> 현재 PowerShell 프로세스로 전달되어 있어야 한다.
+# -> 현재 PowerShell 프로세스로 전달된 값을 사용한다.
 # ============================================================
 
 $requiredVariables = @(
@@ -83,7 +83,7 @@ $databasePassword = $env:MARIADB_PASSWORD
 
 
 # ============================================================
-# 백업 디렉터리
+# 백업 디렉터리 준비
 # ============================================================
 
 $backupDir = Join-Path `
@@ -110,24 +110,25 @@ Write-Host "Creating MariaDB backup: $backupFile"
 # ============================================================
 # MariaDB 연결 확인
 #
+# Windows -> Docker -> shell 문자열 파싱을 피하기 위해
 # sh -lc를 사용하지 않는다.
 #
-# Windows PowerShell -> Docker -> Linux shell 과정에서
-# 따옴표가 깨지는 문제를 피하기 위해 mariadb client를
-# 컨테이너 안에서 직접 실행한다.
+# MYSQL_PWD는 MariaDB client가 인식하는 비밀번호
+# 환경변수다.
 # ============================================================
 
 & docker compose `
     -f $ComposePath `
     exec `
     -T `
-    -e "MARIADB_PWD=$databasePassword" `
+    -e "MYSQL_PWD=$databasePassword" `
     mariadb `
     mariadb `
     "-u$databaseUser" `
     $databaseName `
     '-e' `
-    'SELECT 1'
+    'SELECT 1;'
+
 
 if ($LASTEXITCODE -ne 0) {
     throw 'MariaDB connection test failed before backup.'
@@ -139,12 +140,6 @@ Write-Host 'MariaDB connection test passed.'
 
 # ============================================================
 # MariaDB dump
-#
-# 비밀번호를 -p 옵션 문자열로 넣지 않고
-# 컨테이너 프로세스의 MARIADB_PWD 환경변수로 전달한다.
-#
-# dump 결과는 임시 파일로 직접 저장하지 않고,
-# PowerShell stdout을 받아 UTF-8 SQL 파일로 저장한다.
 # ============================================================
 
 $dumpOutput = @(
@@ -152,7 +147,7 @@ $dumpOutput = @(
         -f $ComposePath `
         exec `
         -T `
-        -e "MARIADB_PWD=$databasePassword" `
+        -e "MYSQL_PWD=$databasePassword" `
         mariadb `
         mariadb-dump `
         '--single-transaction' `

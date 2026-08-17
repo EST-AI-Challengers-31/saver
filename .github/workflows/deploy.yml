@@ -62,7 +62,7 @@ jobs:
 
 
       # ======================================================
-      # 3. Docker Buildx
+      # 3. Docker Buildx 준비
       # ======================================================
 
       - name: Set up Docker Buildx
@@ -82,7 +82,7 @@ jobs:
 
 
       # ======================================================
-      # 5. Spring Boot + React 이미지 빌드
+      # 5. Spring Boot + React 이미지 빌드 및 업로드
       # ======================================================
 
       - name: Build and push backend image
@@ -105,7 +105,7 @@ jobs:
 
 
       # ======================================================
-      # 6. FastAPI 이미지 빌드
+      # 6. FastAPI 이미지 빌드 및 업로드
       # ======================================================
 
       - name: Build and push FastAPI image
@@ -128,9 +128,9 @@ jobs:
 
 
       # ======================================================
-      # 7. 서버 실행 환경설정 생성
+      # 7. 서버 실행 환경설정 만들기
       #
-      # 서버의 .env 파일은 사용하지 않는다.
+      # 서버에 .env 파일을 만들지 않는다.
       #
       # GitHub Secrets / Variables
       #        ↓
@@ -140,8 +140,8 @@ jobs:
       #        ↓
       # deploy.ps1
       #
-      # 비밀번호/API Key가 SSH 명령문에 직접 섞이는 것을
-      # 방지하기 위해 JSON 전체를 Base64로 인코딩한다.
+      # 실제 비밀번호/API Key가 SSH 명령문에 직접 노출되지
+      # 않도록 전체 설정을 Base64로 묶어서 전달한다.
       # ======================================================
 
       - name: Build runtime configuration
@@ -154,32 +154,41 @@ jobs:
           # MariaDB
           # --------------------------------------------------
 
-          # DB 이름
+          # 사용할 DB 이름
           MARIADB_DATABASE: ${{ vars.MARIADB_DATABASE || 'dahum' }}
 
-          # DB 사용자 이름
+          # 닿음 전용 DB 사용자
           MARIADB_USER: ${{ vars.MARIADB_USER || 'dahum_app' }}
 
-          # 실제 DB 사용자 비밀번호
-          MARIADB_PASSWORD: ${{ secrets.MARIADBPASSWORD }}
+          # DB 사용자 비밀번호
+          #
+          # 실제 GitHub Secret 이름:
+          # SPRINGDATASOURCEPASSWORD
+          #
+          # MariaDB와 Spring Boot가 같은 값을 사용한다.
+          MARIADB_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
 
-          # MariaDB 관리자 비밀번호
+          # MariaDB 관리자(root) 비밀번호
           MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADBROOTPASSWORD }}
 
 
           # --------------------------------------------------
-          # Spring Boot DB 연결
+          # Spring Boot
           # --------------------------------------------------
 
+          # 운영 프로필
           SPRING_PROFILES_ACTIVE: ${{ vars.SPRING_PROFILES_ACTIVE || 'prod' }}
 
+          # Docker 내부 MariaDB 주소
           SPRING_DATASOURCE_URL: ${{ vars.SPRING_DATASOURCE_URL || 'jdbc:mariadb://mariadb:3306/dahum' }}
 
+          # Spring Boot DB 사용자
           SPRING_DATASOURCE_USERNAME: ${{ vars.SPRING_DATASOURCE_USERNAME || 'dahum_app' }}
 
-          # MariaDB 앱 비밀번호와 동일한 Secret 사용
-          SPRING_DATASOURCE_PASSWORD: ${{ secrets.MARIADBPASSWORD }}
+          # MariaDB 사용자 비밀번호와 동일한 값 사용
+          SPRING_DATASOURCE_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
 
+          # Caddy/HTTPS 프록시 환경에서 원래 요청 정보 인식
           SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
 
 
@@ -187,19 +196,24 @@ jobs:
           # FastAPI 내부 주소
           # --------------------------------------------------
 
+          # Spring Boot → FastAPI Docker 내부 주소
           AI_BASE_URL: ${{ vars.AI_BASE_URL || 'http://ai:8000' }}
 
 
           # --------------------------------------------------
-          # 닿음 서버 설정
+          # 닿음 서버 / 실행 환경
           # --------------------------------------------------
 
+          # 서버 런타임 데이터 저장 위치
           DAHUM_RUNTIME: ${{ vars.DAHUM_RUNTIME || 'C:/home/dahum/runtime' }}
 
+          # 닿음이 미니 PC에서 사용하는 포트
           DAHUM_HOST_PORT: ${{ vars.DAHUM_HOST_PORT || '9000' }}
 
+          # 외부 도메인
           PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN || 'yellow.it.kr' }}
 
+          # 외부 전체 URL
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL || 'https://yellow.it.kr' }}
 
 
@@ -207,19 +221,23 @@ jobs:
           # 기존 MOVEAI / Caddy
           # --------------------------------------------------
 
+          # 기존 MOVEAI 위치
           MOVEAI_ROOT: ${{ vars.MOVEAI_ROOT || 'C:/MOVEAI' }}
 
+          # 기존 MOVEAI Caddy 자동 수정 여부
+          # 현재 false 유지
           OUTER_CADDY_AUTO_CONFIGURE: ${{ vars.OUTER_CADDY_AUTO_CONFIGURE || 'false' }}
 
+          # 배포 중 외부 도메인까지 확인할지 여부
           VERIFY_PUBLIC_URL: ${{ vars.VERIFY_PUBLIC_URL || 'false' }}
 
 
           # --------------------------------------------------
-          # 현재 배포 상태 확인 방법
+          # 배포 Health Check
           #
-          # 현재는 API 작업 중이므로 web
+          # 현재 외부 API 연동이 완료되지 않았으므로 web
           #
-          # 추후 모든 API / AI 연동 완료 후:
+          # 나중에 전체 연동 완료 후:
           # full
           # --------------------------------------------------
 
@@ -228,16 +246,22 @@ jobs:
 
           # --------------------------------------------------
           # 카카오 로그인
+          #
+          # 실제 GitHub Secret 이름에 맞춤
           # --------------------------------------------------
 
-          KAKAO_CLIENT_ID: ${{ secrets.KAKAO_CLIENT_ID }}
+          # 카카오 REST API Key
+          KAKAO_CLIENT_ID: ${{ secrets.KAKAOCLIENTID }}
 
-          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          # 카카오 Client Secret
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAOCLIENTSECRET }}
 
 
           # --------------------------------------------------
           # CLOVA OCR
-          # 아직 없다면 비어 있어도 현재 web 배포에는 영향 없음
+          #
+          # 아직 GitHub Secret이 없다면 빈 값으로 들어간다.
+          # 현재 web 배포에서는 필수값이 아니다.
           # --------------------------------------------------
 
           CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_API_KEY }}
@@ -245,13 +269,18 @@ jobs:
 
           # --------------------------------------------------
           # LLM
+          #
+          # 실제 GitHub Secret 이름:
+          # LLMAPIKEY
           # --------------------------------------------------
 
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_API_KEY: ${{ secrets.LLMAPIKEY }}
 
 
           # --------------------------------------------------
           # Pinecone
+          #
+          # 아직 설정하지 않았다면 빈 값으로 들어간다.
           # --------------------------------------------------
 
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
@@ -261,6 +290,8 @@ jobs:
 
           # --------------------------------------------------
           # Ellen API
+          #
+          # 아직 설정하지 않았다면 빈 값으로 들어간다.
           # --------------------------------------------------
 
           ELLEN_API_KEY: ${{ secrets.ELLEN_API_KEY }}
@@ -269,8 +300,9 @@ jobs:
 
 
           # --------------------------------------------------
-          # RAG
-          # 현재 임시 설정
+          # RAG 설정
+          #
+          # 현재 테스트용 임시값
           # --------------------------------------------------
 
           RAG_SIMILARITY_THRESHOLD: ${{ vars.RAG_SIMILARITY_THRESHOLD || '0.80' }}
@@ -323,7 +355,7 @@ jobs:
               "KAKAO_CLIENT_ID",
               "KAKAO_CLIENT_SECRET",
 
-              # OCR / AI
+              # OCR / LLM
               "CLOVA_OCR_API_KEY",
               "LLM_API_KEY",
 
@@ -359,8 +391,8 @@ jobs:
           ).decode("ascii")
 
 
-          # Base64 안에는 Secret 값들이 들어 있으므로
-          # GitHub Actions 로그에 나타나지 않도록 마스킹한다.
+          # Base64 안에는 실제 Secret 값들이 포함되어 있으므로
+          # GitHub Actions 로그에 출력되더라도 가려지도록 처리
           print(f"::add-mask::{encoded}")
 
 
@@ -388,9 +420,10 @@ jobs:
       # ======================================================
       # 8. Windows 미니 PC 배포
       #
-      # RuntimeConfigBase64를 deploy.ps1로 직접 전달한다.
+      # 서버의 .env는 사용하지 않는다.
       #
-      # 서버에는 .env를 만들지 않는다.
+      # 위에서 만든 RuntimeConfigBase64를
+      # deploy.ps1로 전달한다.
       # ======================================================
 
       - name: Deploy exact images to Windows mini PC
@@ -401,8 +434,8 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
 
-          # 기존 설정을 유지.
-          # SSH Key 인증만 사용할 경우 추후 제거 가능.
+          # 현재 등록되어 있으므로 유지
+          # SSH Key만 사용하기로 확정하면 나중에 제거 가능
           password: ${{ secrets.SERVER_PASSWORD }}
 
           port: ${{ secrets.SERVER_PORT }}

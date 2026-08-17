@@ -38,10 +38,57 @@ if (-not (Test-Path -LiteralPath $ComposePath)) {
 
 
 # ============================================================
-# 백업 폴더 준비
+# 필수 DB 환경변수 확인
+#
+# 이 값들은 GitHub Actions
+# -> deploy.ps1
+# -> 현재 PowerShell 프로세스로 전달되어 있어야 한다.
 # ============================================================
 
-$backupDir = Join-Path $RuntimePath 'backup\mariadb'
+$requiredVariables = @(
+    'MARIADB_DATABASE',
+    'MARIADB_USER',
+    'MARIADB_PASSWORD'
+)
+
+$missingVariables = @()
+
+foreach ($name in $requiredVariables) {
+
+    $value = [Environment]::GetEnvironmentVariable(
+        $name,
+        'Process'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $missingVariables += $name
+    }
+}
+
+if ($missingVariables.Count -gt 0) {
+    throw (
+        'Required MariaDB backup environment variables are missing: ' +
+        ($missingVariables -join ', ')
+    )
+}
+
+
+# ============================================================
+# 환경변수 읽기
+# ============================================================
+
+$databaseName = $env:MARIADB_DATABASE
+$databaseUser = $env:MARIADB_USER
+$databasePassword = $env:MARIADB_PASSWORD
+
+
+# ============================================================
+# 백업 디렉터리
+# ============================================================
+
+$backupDir = Join-Path `
+    $RuntimePath `
+    'backup\mariadb'
 
 New-Item `
     -ItemType Directory `
@@ -61,42 +108,58 @@ Write-Host "Creating MariaDB backup: $backupFile"
 
 
 # ============================================================
-# MariaDB 백업
+# MariaDB 연결 확인
 #
-# 중요:
-# 서버 .env 파일은 사용하지 않는다.
+# sh -lc를 사용하지 않는다.
 #
-# GitHub Actions
-#   -> deploy.ps1
-#   -> Process Environment
-#   -> docker compose
-#   -> mariadb container
-#
-# Compose의 environment 설정으로 이미
-# MARIADB_USER / MARIADB_PASSWORD / MARIADB_DATABASE가
-# 컨테이너 안에 들어가 있다.
+# Windows PowerShell -> Docker -> Linux shell 과정에서
+# 따옴표가 깨지는 문제를 피하기 위해 mariadb client를
+# 컨테이너 안에서 직접 실행한다.
 # ============================================================
 
-$dumpCommand = @'
-mariadb-dump \
-  --single-transaction \
-  --routines \
-  --triggers \
-  -u"$MARIADB_USER" \
-  -p"$MARIADB_PASSWORD" \
-  "$MARIADB_DATABASE"
-'@
+& docker compose `
+    -f $ComposePath `
+    exec `
+    -T `
+    -e "MARIADB_PWD=$databasePassword" `
+    mariadb `
+    mariadb `
+    "-u$databaseUser" `
+    $databaseName `
+    '-e' `
+    'SELECT 1'
 
+if ($LASTEXITCODE -ne 0) {
+    throw 'MariaDB connection test failed before backup.'
+}
+
+
+Write-Host 'MariaDB connection test passed.'
+
+
+# ============================================================
+# MariaDB dump
+#
+# 비밀번호를 -p 옵션 문자열로 넣지 않고
+# 컨테이너 프로세스의 MARIADB_PWD 환경변수로 전달한다.
+#
+# dump 결과는 임시 파일로 직접 저장하지 않고,
+# PowerShell stdout을 받아 UTF-8 SQL 파일로 저장한다.
+# ============================================================
 
 $dumpOutput = @(
     & docker compose `
         -f $ComposePath `
         exec `
         -T `
+        -e "MARIADB_PWD=$databasePassword" `
         mariadb `
-        sh `
-        -lc `
-        $dumpCommand
+        mariadb-dump `
+        '--single-transaction' `
+        '--routines' `
+        '--triggers' `
+        "-u$databaseUser" `
+        $databaseName
 )
 
 
@@ -133,4 +196,8 @@ if ($backupInfo.Length -eq 0) {
 }
 
 
-Write-Host "MariaDB backup completed: $backupFile"
+Write-Host (
+    "MariaDB backup completed: {0} ({1} bytes)" -f
+    $backupFile,
+    $backupInfo.Length
+)

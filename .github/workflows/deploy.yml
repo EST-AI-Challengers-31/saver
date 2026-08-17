@@ -11,6 +11,7 @@ on:
       - "db/**"
       - "deploy/**"
       - ".github/workflows/deploy.yml"
+
   workflow_dispatch:
 
 concurrency:
@@ -21,26 +22,56 @@ permissions:
   contents: read
   packages: write
 
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
+
+      # ======================================================
+      # 1. 저장소 코드 받기
+      # ======================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # ======================================================
+      # 2. GHCR 이미지 이름 만들기
+      #
+      # 예:
+      # ghcr.io/est-ai-challengers-31/saver-backend
+      # ghcr.io/est-ai-challengers-31/saver-ai
+      # ======================================================
 
       - name: Resolve GHCR image names
         id: images
         shell: bash
         run: |
           set -euo pipefail
-          repo_lower="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          repo_lower="$(
+            printf '%s' "$GITHUB_REPOSITORY" |
+            tr '[:upper:]' '[:lower:]'
+          )"
+
           echo "backend=ghcr.io/${repo_lower}-backend" >> "$GITHUB_OUTPUT"
           echo "ai=ghcr.io/${repo_lower}-ai" >> "$GITHUB_OUTPUT"
 
+
+      # ======================================================
+      # 3. Docker Buildx
+      # ======================================================
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+
+      # ======================================================
+      # 4. GitHub Container Registry 로그인
+      # ======================================================
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -49,20 +80,33 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+
+      # ======================================================
+      # 5. Spring Boot + React 이미지 빌드
+      # ======================================================
+
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
           push: true
+
           tags: |
             ${{ steps.images.outputs.backend }}:${{ github.sha }}
             ${{ steps.images.outputs.backend }}:latest
+
           cache-from: type=gha,scope=dahum-backend
           cache-to: type=gha,mode=max,scope=dahum-backend
+
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+
+      # ======================================================
+      # 6. FastAPI 이미지 빌드
+      # ======================================================
 
       - name: Build and push FastAPI image
         uses: docker/build-push-action@v6
@@ -70,23 +114,300 @@ jobs:
           context: ./ai
           file: ./ai/Dockerfile
           push: true
+
           tags: |
             ${{ steps.images.outputs.ai }}:${{ github.sha }}
             ${{ steps.images.outputs.ai }}:latest
+
           cache-from: type=gha,scope=dahum-ai
           cache-to: type=gha,mode=max,scope=dahum-ai
+
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+
+      # ======================================================
+      # 7. 서버 실행 환경설정 생성
+      #
+      # 서버의 .env 파일은 사용하지 않는다.
+      #
+      # GitHub Secrets / Variables
+      #        ↓
+      # JSON
+      #        ↓
+      # Base64
+      #        ↓
+      # deploy.ps1
+      #
+      # 비밀번호/API Key가 SSH 명령문에 직접 섞이는 것을
+      # 방지하기 위해 JSON 전체를 Base64로 인코딩한다.
+      # ======================================================
+
+      - name: Build runtime configuration
+        id: runtime_config
+        shell: bash
+
+        env:
+
+          # --------------------------------------------------
+          # MariaDB
+          # --------------------------------------------------
+
+          # DB 이름
+          MARIADB_DATABASE: ${{ vars.MARIADB_DATABASE || 'dahum' }}
+
+          # DB 사용자 이름
+          MARIADB_USER: ${{ vars.MARIADB_USER || 'dahum_app' }}
+
+          # 실제 DB 사용자 비밀번호
+          MARIADB_PASSWORD: ${{ secrets.MARIADB_PASSWORD }}
+
+          # MariaDB 관리자 비밀번호
+          MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADB_ROOT_PASSWORD }}
+
+
+          # --------------------------------------------------
+          # Spring Boot DB 연결
+          # --------------------------------------------------
+
+          SPRING_PROFILES_ACTIVE: ${{ vars.SPRING_PROFILES_ACTIVE || 'prod' }}
+
+          SPRING_DATASOURCE_URL: ${{ vars.SPRING_DATASOURCE_URL || 'jdbc:mariadb://mariadb:3306/dahum' }}
+
+          SPRING_DATASOURCE_USERNAME: ${{ vars.SPRING_DATASOURCE_USERNAME || 'dahum_app' }}
+
+          # MariaDB 앱 비밀번호와 동일한 Secret 사용
+          SPRING_DATASOURCE_PASSWORD: ${{ secrets.MARIADB_PASSWORD }}
+
+          SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
+
+
+          # --------------------------------------------------
+          # FastAPI 내부 주소
+          # --------------------------------------------------
+
+          AI_BASE_URL: ${{ vars.AI_BASE_URL || 'http://ai:8000' }}
+
+
+          # --------------------------------------------------
+          # 닿음 서버 설정
+          # --------------------------------------------------
+
+          DAHUM_RUNTIME: ${{ vars.DAHUM_RUNTIME || 'C:/home/dahum/runtime' }}
+
+          DAHUM_HOST_PORT: ${{ vars.DAHUM_HOST_PORT || '9000' }}
+
+          PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN || 'yellow.it.kr' }}
+
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL || 'https://yellow.it.kr' }}
+
+
+          # --------------------------------------------------
+          # 기존 MOVEAI / Caddy
+          # --------------------------------------------------
+
+          MOVEAI_ROOT: ${{ vars.MOVEAI_ROOT || 'C:/MOVEAI' }}
+
+          OUTER_CADDY_AUTO_CONFIGURE: ${{ vars.OUTER_CADDY_AUTO_CONFIGURE || 'false' }}
+
+          VERIFY_PUBLIC_URL: ${{ vars.VERIFY_PUBLIC_URL || 'false' }}
+
+
+          # --------------------------------------------------
+          # 현재 배포 상태 확인 방법
+          #
+          # 현재는 API 작업 중이므로 web
+          #
+          # 추후 모든 API / AI 연동 완료 후:
+          # full
+          # --------------------------------------------------
+
+          DEPLOY_HEALTH_MODE: ${{ vars.DEPLOY_HEALTH_MODE || 'web' }}
+
+
+          # --------------------------------------------------
+          # 카카오 로그인
+          # --------------------------------------------------
+
+          KAKAO_CLIENT_ID: ${{ secrets.KAKAO_CLIENT_ID }}
+
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+
+
+          # --------------------------------------------------
+          # CLOVA OCR
+          # 아직 없다면 비어 있어도 현재 web 배포에는 영향 없음
+          # --------------------------------------------------
+
+          CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_API_KEY }}
+
+
+          # --------------------------------------------------
+          # LLM
+          # --------------------------------------------------
+
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+
+
+          # --------------------------------------------------
+          # Pinecone
+          # --------------------------------------------------
+
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+
+          PINECONE_INDEX: ${{ vars.PINECONE_INDEX }}
+
+
+          # --------------------------------------------------
+          # Ellen API
+          # --------------------------------------------------
+
+          ELLEN_API_KEY: ${{ secrets.ELLEN_API_KEY }}
+
+          ELLEN_API_BASE_URL: ${{ vars.ELLEN_API_BASE_URL }}
+
+
+          # --------------------------------------------------
+          # RAG
+          # 현재 임시 설정
+          # --------------------------------------------------
+
+          RAG_SIMILARITY_THRESHOLD: ${{ vars.RAG_SIMILARITY_THRESHOLD || '0.80' }}
+
+          RAG_TOP_K: ${{ vars.RAG_TOP_K || '5' }}
+
+
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          import json
+          import base64
+
+
+          keys = [
+
+              # MariaDB
+              "MARIADB_DATABASE",
+              "MARIADB_USER",
+              "MARIADB_PASSWORD",
+              "MARIADB_ROOT_PASSWORD",
+
+              # Spring Boot
+              "SPRING_PROFILES_ACTIVE",
+              "SPRING_DATASOURCE_URL",
+              "SPRING_DATASOURCE_USERNAME",
+              "SPRING_DATASOURCE_PASSWORD",
+              "SERVER_FORWARD_HEADERS_STRATEGY",
+
+              # FastAPI
+              "AI_BASE_URL",
+
+              # Server
+              "DAHUM_RUNTIME",
+              "DAHUM_HOST_PORT",
+              "PUBLIC_DOMAIN",
+              "PUBLIC_BASE_URL",
+
+              # MOVEAI / Caddy
+              "MOVEAI_ROOT",
+              "OUTER_CADDY_AUTO_CONFIGURE",
+              "VERIFY_PUBLIC_URL",
+
+              # Deployment
+              "DEPLOY_HEALTH_MODE",
+
+              # Kakao
+              "KAKAO_CLIENT_ID",
+              "KAKAO_CLIENT_SECRET",
+
+              # OCR / AI
+              "CLOVA_OCR_API_KEY",
+              "LLM_API_KEY",
+
+              # Pinecone
+              "PINECONE_API_KEY",
+              "PINECONE_INDEX",
+
+              # Ellen
+              "ELLEN_API_KEY",
+              "ELLEN_API_BASE_URL",
+
+              # RAG
+              "RAG_SIMILARITY_THRESHOLD",
+              "RAG_TOP_K",
+          ]
+
+
+          config = {
+              key: os.environ.get(key, "")
+              for key in keys
+          }
+
+
+          raw = json.dumps(
+              config,
+              ensure_ascii=False,
+              separators=(",", ":")
+          ).encode("utf-8")
+
+
+          encoded = base64.b64encode(
+              raw
+          ).decode("ascii")
+
+
+          # Base64 안에는 Secret 값들이 들어 있으므로
+          # GitHub Actions 로그에 나타나지 않도록 마스킹한다.
+          print(f"::add-mask::{encoded}")
+
+
+          github_output = os.environ["GITHUB_OUTPUT"]
+
+
+          with open(
+              github_output,
+              "a",
+              encoding="utf-8"
+          ) as output_file:
+
+              output_file.write(
+                  f"config={encoded}\n"
+              )
+
+
+          print(
+              "Runtime configuration created successfully."
+          )
+
+          PY
+
+
+      # ======================================================
+      # 8. Windows 미니 PC 배포
+      #
+      # RuntimeConfigBase64를 deploy.ps1로 직접 전달한다.
+      #
+      # 서버에는 .env를 만들지 않는다.
+      # ======================================================
+
       - name: Deploy exact images to Windows mini PC
         uses: appleboy/ssh-action@v1.2.2
+
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+
+          # 기존 설정을 유지.
+          # SSH Key 인증만 사용할 경우 추후 제거 가능.
           password: ${{ secrets.SERVER_PASSWORD }}
+
           port: ${{ secrets.SERVER_PORT }}
+
           command_timeout: 20m
+
           script: |
-            cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout main && git pull --ff-only origin main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}"
+            cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout main && git pull --ff-only origin main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"

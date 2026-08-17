@@ -1,20 +1,89 @@
 param(
     [switch]$SkipGitUpdate,
+
+    # GitHub Actions가 빌드한 백엔드 이미지
     [string]$BackendImage = '',
+
+    # GitHub Actions가 빌드한 AI 이미지
     [string]$AiImage = '',
+
+    # GHCR 사용자명
     [string]$RegistryUser = '',
+
+    # GHCR 인증 토큰
     [string]$RegistryToken = '',
-    [string]$RollbackCommit = ''
+
+    # 문제가 생겼을 때 되돌아갈 이전 Git commit
+    [string]$RollbackCommit = '',
+
+    # GitHub Actions가 전달하는
+    # 런타임 환경설정 JSON의 Base64 문자열
+    [string]$RuntimeConfigBase64 = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 
 # ============================================================
-# Environment helpers
-# GitHub Actions에서 전달된 프로세스 환경변수를 읽는다.
+# Runtime configuration
+#
 # 서버의 .env 파일은 사용하지 않는다.
+#
+# GitHub Actions
+#   -> JSON 생성
+#   -> Base64 인코딩
+#   -> RuntimeConfigBase64 전달
+#   -> 이 스크립트에서 환경변수로 등록
 # ============================================================
+
+function Import-RuntimeConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EncodedConfig
+    )
+
+    if ([string]::IsNullOrWhiteSpace($EncodedConfig)) {
+        throw 'Runtime configuration was not supplied by GitHub Actions.'
+    }
+
+    try {
+        $bytes = [System.Convert]::FromBase64String(
+            $EncodedConfig
+        )
+
+        $json = [System.Text.Encoding]::UTF8.GetString(
+            $bytes
+        )
+
+        $config = $json | ConvertFrom-Json
+    }
+    catch {
+        throw (
+            'Could not decode runtime configuration from GitHub Actions: ' +
+            $_.Exception.Message
+        )
+    }
+
+
+    foreach ($property in $config.PSObject.Properties) {
+
+        $name = [string]$property.Name
+        $value = [string]$property.Value
+
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+
+            [Environment]::SetEnvironmentVariable(
+                $name,
+                $value,
+                'Process'
+            )
+        }
+    }
+
+
+    Write-Host 'Runtime configuration loaded from GitHub Actions.'
+}
+
 
 function Get-EnvValue {
     param(
@@ -24,7 +93,10 @@ function Get-EnvValue {
         [string]$DefaultValue = ''
     )
 
-    $value = [Environment]::GetEnvironmentVariable($Name)
+    $value = [Environment]::GetEnvironmentVariable(
+        $Name,
+        'Process'
+    )
 
     if (-not [string]::IsNullOrWhiteSpace($value)) {
         return $value
@@ -42,14 +114,19 @@ function Assert-RequiredEnv {
 
     $missing = @()
 
+
     foreach ($name in $Names) {
 
-        $value = [Environment]::GetEnvironmentVariable($name)
+        $value = [Environment]::GetEnvironmentVariable(
+            $name,
+            'Process'
+        )
 
         if ([string]::IsNullOrWhiteSpace($value)) {
             $missing += $name
         }
     }
+
 
     if ($missing.Count -gt 0) {
 
@@ -62,8 +139,13 @@ function Assert-RequiredEnv {
 
 
 # ============================================================
-# Docker SSH / GHCR authentication
-# Windows 비대화형 SSH에서 docker login을 사용하지 않는다.
+# Docker / GHCR authentication
+#
+# Windows SSH 비대화형 세션에서는
+# Docker Desktop Credential Manager 때문에
+# docker login이 실패할 수 있다.
+#
+# 따라서 임시 DOCKER_CONFIG를 직접 생성한다.
 # ============================================================
 
 function Initialize-DockerSshConfig {
@@ -82,11 +164,16 @@ function Initialize-DockerSshConfig {
         throw 'GHCR registry user was not supplied by GitHub Actions.'
     }
 
+
     if ([string]::IsNullOrWhiteSpace($RegistryToken)) {
         throw 'GHCR registry token was not supplied by GitHub Actions.'
     }
 
-    $dockerConfig = Join-Path $ProjectRoot '.docker-ci'
+
+    $dockerConfig = Join-Path `
+        $ProjectRoot `
+        '.docker-ci'
+
 
     if (Test-Path -LiteralPath $dockerConfig) {
 
@@ -96,18 +183,27 @@ function Initialize-DockerSshConfig {
             -Force
     }
 
+
     New-Item `
         -ItemType Directory `
         -Path $dockerConfig `
-        -Force | Out-Null
+        -Force |
+        Out-Null
 
 
-    # GitHub 사용자명:토큰 값을 Base64로 인코딩한다.
+    # GHCR 인증 형식:
+    #
+    # username:token
+    #
+    # 을 Base64로 인코딩한다.
+
     $credentialText = "${RegistryUser}:${RegistryToken}"
+
 
     $credentialBytes = [System.Text.Encoding]::UTF8.GetBytes(
         $credentialText
     )
+
 
     $encodedCredential = [System.Convert]::ToBase64String(
         $credentialBytes
@@ -124,10 +220,14 @@ function Initialize-DockerSshConfig {
         cliPluginsExtraDirs = @(
             (Join-Path $env:USERPROFILE '.docker\cli-plugins')
         )
-    } | ConvertTo-Json -Depth 6
+    } |
+    ConvertTo-Json -Depth 6
 
 
-    $configPath = Join-Path $dockerConfig 'config.json'
+    $configPath = Join-Path `
+        $dockerConfig `
+        'config.json'
+
 
     [System.IO.File]::WriteAllText(
         $configPath,
@@ -138,11 +238,19 @@ function Initialize-DockerSshConfig {
 
     $env:DOCKER_CONFIG = $dockerConfig
 
+
     # Docker Desktop Linux Engine
-    $env:DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+    $env:DOCKER_HOST = (
+        'npipe:////./pipe/dockerDesktopLinuxEngine'
+    )
+
 
     Write-Host "Using Docker CI config: $dockerConfig"
-    Write-Host 'GHCR authentication configured for non-interactive deployment.'
+
+    Write-Host (
+        'GHCR authentication configured ' +
+        'for non-interactive deployment.'
+    )
 }
 
 
@@ -155,9 +263,11 @@ function Remove-DockerSshConfig {
         return
     }
 
+
     if (-not (Test-Path -LiteralPath $DockerConfigPath)) {
         return
     }
+
 
     try {
 
@@ -166,13 +276,14 @@ function Remove-DockerSshConfig {
             -Recurse `
             -Force
 
+
         Write-Host 'Temporary Docker CI credentials removed.'
     }
     catch {
 
         Write-Warning (
-            "Could not remove temporary Docker CI config: " +
-            "$($_.Exception.Message)"
+            'Could not remove temporary Docker CI config: ' +
+            $_.Exception.Message
         )
     }
 }
@@ -180,8 +291,12 @@ function Remove-DockerSshConfig {
 
 # ============================================================
 # Docker Compose
+#
+# 중요:
 # --env-file 사용 안 함.
-# 현재 PowerShell 프로세스의 환경변수를 Compose가 사용한다.
+#
+# Docker Compose는 현재 PowerShell 프로세스의
+# 환경변수를 그대로 사용한다.
 # ============================================================
 
 function Invoke-Compose {
@@ -197,10 +312,11 @@ function Invoke-Compose {
         -f $ComposeFile `
         @Arguments
 
+
     if ($LASTEXITCODE -ne 0) {
 
         throw (
-            "docker compose failed: " +
+            'docker compose failed: ' +
             ($Arguments -join ' ')
         )
     }
@@ -210,12 +326,13 @@ function Invoke-Compose {
 # ============================================================
 # Health check
 #
-# web:
-#   현재 개발 단계
-#   웹 서비스가 HTTP 응답을 하면 성공
+# web
+#   현재 개발 단계용
+#   웹 페이지가 정상 응답하면 성공
 #
-# full:
-#   backend + database + ai 모두 UP이어야 성공
+# full
+#   최종 운영 단계용
+#   backend + database + ai 모두 UP 필요
 # ============================================================
 
 function Wait-DahumHealthy {
@@ -223,18 +340,32 @@ function Wait-DahumHealthy {
         [Parameter(Mandatory = $true)]
         [int]$HostPort,
 
-        [ValidateSet('web', 'full')]
+        [ValidateSet(
+            'web',
+            'full'
+        )]
         [string]$Mode = 'web',
 
         [int]$TimeoutSeconds = 180
     )
 
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $deadline = (
+        Get-Date
+    ).AddSeconds(
+        $TimeoutSeconds
+    )
+
+
     $lastMessage = 'No health response yet.'
+
 
     while ((Get-Date) -lt $deadline) {
 
         try {
+
+            # ------------------------------------------------
+            # WEB MODE
+            # ------------------------------------------------
 
             if ($Mode -eq 'web') {
 
@@ -245,7 +376,7 @@ function Wait-DahumHealthy {
 
 
                 $lastMessage = (
-                    "HTTP status: " +
+                    'HTTP status: ' +
                     [string]$response.StatusCode
                 )
 
@@ -256,23 +387,34 @@ function Wait-DahumHealthy {
                 ) {
 
                     Write-Host (
-                        "Dahum WEB health check passed: " +
+                        'Dahum WEB health check passed: ' +
                         $lastMessage
                     )
 
                     return
                 }
             }
+
+
+            # ------------------------------------------------
+            # FULL MODE
+            # ------------------------------------------------
+
             else {
 
                 $status = Invoke-RestMethod `
-                    -Uri "http://127.0.0.1:$HostPort/api/system/status" `
+                    -Uri (
+                        "http://127.0.0.1:" +
+                        "$HostPort/api/system/status"
+                    ) `
                     -TimeoutSec 10
 
 
                 $lastMessage = (
                     $status |
-                    ConvertTo-Json -Compress -Depth 5
+                    ConvertTo-Json `
+                        -Compress `
+                        -Depth 5
                 )
 
 
@@ -283,7 +425,7 @@ function Wait-DahumHealthy {
                 ) {
 
                     Write-Host (
-                        "Dahum FULL health check passed: " +
+                        'Dahum FULL health check passed: ' +
                         $lastMessage
                     )
 
@@ -296,12 +438,13 @@ function Wait-DahumHealthy {
             $lastMessage = $_.Exception.Message
         }
 
+
         Start-Sleep -Seconds 5
     }
 
 
     throw (
-        "Dahum did not become healthy within " +
+        'Dahum did not become healthy within ' +
         "$TimeoutSeconds seconds. " +
         "Mode=$Mode. " +
         "Last result: $lastMessage"
@@ -322,6 +465,7 @@ function Get-ImageBase {
     $lastSlash = $Image.LastIndexOf('/')
     $lastColon = $Image.LastIndexOf(':')
 
+
     if ($lastColon -gt $lastSlash) {
 
         return $Image.Substring(
@@ -330,12 +474,15 @@ function Get-ImageBase {
         )
     }
 
+
     return $Image
 }
 
 
 # ============================================================
 # Rollback
+#
+# 새 이미지 배포 실패 시 이전 commit 이미지로 되돌린다.
 # ============================================================
 
 function Try-RollbackImages {
@@ -350,7 +497,10 @@ function Try-RollbackImages {
 
         [int]$HostPort,
 
-        [ValidateSet('web', 'full')]
+        [ValidateSet(
+            'web',
+            'full'
+        )]
         [string]$HealthMode = 'web'
     )
 
@@ -368,20 +518,28 @@ function Try-RollbackImages {
     $backendBase = Get-ImageBase `
         -Image $CurrentBackendImage
 
+
     $aiBase = Get-ImageBase `
         -Image $CurrentAiImage
 
 
-    $previousBackend = "$backendBase`:$PreviousCommit"
-    $previousAi = "$aiBase`:$PreviousCommit"
+    $previousBackend = (
+        "$backendBase`:$PreviousCommit"
+    )
+
+
+    $previousAi = (
+        "$aiBase`:$PreviousCommit"
+    )
 
 
     Write-Warning (
-        "Attempting image rollback to commit " +
+        'Attempting image rollback to commit ' +
         $PreviousCommit
     )
 
 
+    # Compose가 읽을 환경변수 변경
     $env:BACKEND_IMAGE = $previousBackend
     $env:AI_IMAGE = $previousAi
 
@@ -419,8 +577,8 @@ function Try-RollbackImages {
     catch {
 
         Write-Warning (
-            "Automatic image rollback failed: " +
-            "$($_.Exception.Message)"
+            'Automatic image rollback failed: ' +
+            $_.Exception.Message
         )
     }
 }
@@ -430,23 +588,40 @@ function Try-RollbackImages {
 # Paths
 # ============================================================
 
-$DeployDir = Split-Path -Parent $PSScriptRoot
+$DeployDir = Split-Path `
+    -Parent `
+    $PSScriptRoot
 
-$AppPath = Split-Path -Parent $DeployDir
 
-$DahumHome = Split-Path -Parent $AppPath
+$AppPath = Split-Path `
+    -Parent `
+    $DeployDir
 
-$RuntimePath = Join-Path $DahumHome 'runtime'
 
-$ComposePath = Join-Path $DeployDir 'docker-compose.yml'
+$DahumHome = Split-Path `
+    -Parent `
+    $AppPath
+
+
+$RuntimePath = Join-Path `
+    $DahumHome `
+    'runtime'
+
+
+$ComposePath = Join-Path `
+    $DeployDir `
+    'docker-compose.yml'
+
 
 $EnsureDockerPath = Join-Path `
     $PSScriptRoot `
     'ensure_docker.ps1'
 
+
 $BackupPath = Join-Path `
     $PSScriptRoot `
     'backup_mariadb.ps1'
+
 
 $PublicRoutePath = Join-Path `
     $PSScriptRoot `
@@ -455,6 +630,7 @@ $PublicRoutePath = Join-Path `
 
 # ============================================================
 # Required files
+#
 # .env 파일은 검사하지 않는다.
 # ============================================================
 
@@ -463,18 +639,29 @@ if (-not (Test-Path -LiteralPath $ComposePath)) {
     throw "Compose file not found: $ComposePath"
 }
 
+
 if (-not (Test-Path -LiteralPath $EnsureDockerPath)) {
 
     throw (
-        "Docker readiness script not found: " +
+        'Docker readiness script not found: ' +
         $EnsureDockerPath
     )
 }
 
 
 # ============================================================
-# Runtime configuration
-# GitHub Actions가 전달한 환경변수를 읽는다.
+# GitHub Actions runtime configuration import
+#
+# 여기서 Actions가 전달한 값을
+# $env:XXX 형식으로 등록한다.
+# ============================================================
+
+Import-RuntimeConfig `
+    -EncodedConfig $RuntimeConfigBase64
+
+
+# ============================================================
+# Normal runtime configuration
 # ============================================================
 
 $hostPort = [int](
@@ -520,20 +707,31 @@ $healthMode = (
 ).ToLowerInvariant()
 
 
-if ($healthMode -notin @('web', 'full')) {
+if ($healthMode -notin @(
+    'web',
+    'full'
+)) {
 
     throw (
-        'DEPLOY_HEALTH_MODE must be either ' +
+        'DEPLOY_HEALTH_MODE must be ' +
         "'web' or 'full'."
     )
 }
 
 
+Write-Host "Dahum host port: $hostPort"
+
+Write-Host "Public domain: $publicDomain"
+
+Write-Host "Deployment health mode: $healthMode"
+
+
 # ============================================================
-# Required runtime environment variables
+# Required environment values
 #
-# 실제 값은 GitHub Actions에서 전달되어야 한다.
-# 외부 API 키는 아직 미연동이므로 현재 필수 목록에서 제외한다.
+# 외부 API는 아직 작업 중이므로 여기서는 강제하지 않는다.
+#
+# DB + Spring + AI 내부 주소만 필수.
 # ============================================================
 
 Assert-RequiredEnv `
@@ -551,8 +749,11 @@ Assert-RequiredEnv `
 
 # ============================================================
 # Docker images
-# Actions parameter가 우선.
-# 없으면 GitHub Actions가 주입한 환경변수를 사용한다.
+#
+# 우선순위
+#
+# 1. deploy.ps1 parameter
+# 2. GitHub Actions 환경변수
 # ============================================================
 
 if ([string]::IsNullOrWhiteSpace($BackendImage)) {
@@ -582,6 +783,7 @@ if (
 
 
 $env:BACKEND_IMAGE = $BackendImage
+
 $env:AI_IMAGE = $AiImage
 
 
@@ -589,12 +791,16 @@ $env:AI_IMAGE = $AiImage
 # Repository
 # ============================================================
 
-Set-Location -LiteralPath $AppPath
+Set-Location `
+    -LiteralPath `
+    $AppPath
 
 
 if (-not $SkipGitUpdate) {
 
-    $dirty = @(git status --porcelain)
+    $dirty = @(
+        git status --porcelain
+    )
 
 
     if ($LASTEXITCODE -ne 0) {
@@ -612,6 +818,7 @@ if (-not $SkipGitUpdate) {
     }
 
 
+    # 현재 commit을 rollback용으로 저장
     if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
 
         $RollbackCommit = (
@@ -620,7 +827,10 @@ if (-not $SkipGitUpdate) {
     }
 
 
-    git fetch --prune origin main
+    git fetch `
+        --prune `
+        origin `
+        main
 
 
     if ($LASTEXITCODE -ne 0) {
@@ -638,7 +848,10 @@ if (-not $SkipGitUpdate) {
     }
 
 
-    git pull --ff-only origin main
+    git pull `
+        --ff-only `
+        origin `
+        main
 
 
     if ($LASTEXITCODE -ne 0) {
@@ -649,10 +862,11 @@ if (-not $SkipGitUpdate) {
 
 
 # ============================================================
-# Docker
+# Docker availability
 # ============================================================
 
 Write-Host 'Ensuring Docker is available...'
+
 
 & $EnsureDockerPath
 
@@ -662,6 +876,10 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker readiness check failed.'
 }
 
+
+# ============================================================
+# Temporary GHCR authentication
+# ============================================================
 
 Initialize-DockerSshConfig `
     -ProjectRoot $AppPath `
@@ -675,13 +893,27 @@ $temporaryDockerConfig = $env:DOCKER_CONFIG
 try {
 
     # ========================================================
-    # Deploy
+    # Deploy information
     # ========================================================
 
-    Write-Host "Deploying backend image: $BackendImage"
-    Write-Host "Deploying AI image: $AiImage"
-    Write-Host "Deployment health mode: $healthMode"
+    Write-Host (
+        "Deploying backend image: $BackendImage"
+    )
 
+
+    Write-Host (
+        "Deploying AI image: $AiImage"
+    )
+
+
+    Write-Host (
+        "Deployment health mode: $healthMode"
+    )
+
+
+    # ========================================================
+    # Validate Compose
+    # ========================================================
 
     Write-Host (
         'Validating Docker Compose configuration...'
@@ -718,9 +950,8 @@ try {
     # ========================================================
     # MariaDB backup
     #
-    # 주의:
-    # backup_mariadb.ps1도 .env 없는 방식으로
-    # 수정되어 있어야 한다.
+    # backup_mariadb.ps1 역시
+    # .env 없는 방식으로 수정되어 있어야 한다.
     # ========================================================
 
     if ($running -contains 'mariadb') {
@@ -764,8 +995,7 @@ try {
     # ========================================================
 
     Write-Host (
-        'Pulling immutable application images ' +
-        'and infrastructure images...'
+        'Pulling application and infrastructure images...'
     )
 
 
@@ -800,10 +1030,12 @@ try {
 
 
     # ========================================================
-    # Health check
+    # Health
     # ========================================================
 
-    Write-Host 'Waiting for Dahum health check...'
+    Write-Host (
+        'Waiting for Dahum health check...'
+    )
 
 
     Wait-DahumHealthy `
@@ -813,7 +1045,10 @@ try {
 
 
     # ========================================================
-    # Cleanup Docker images
+    # Docker cleanup
+    #
+    # dangling layer만 제거.
+    # rollback 이미지는 유지.
     # ========================================================
 
     Write-Host (
@@ -822,11 +1057,12 @@ try {
     )
 
 
-    & docker image prune -f | Out-Host
+    & docker image prune -f |
+        Out-Host
 
 
     # ========================================================
-    # Outer MOVEAI Caddy
+    # Existing MOVEAI Caddy
     # ========================================================
 
     if ($autoConfigureOuterCaddy) {
@@ -846,7 +1082,7 @@ try {
 
 
     # ========================================================
-    # Public URL
+    # Optional public URL verification
     # ========================================================
 
     if ($verifyPublicUrl) {
@@ -878,10 +1114,12 @@ try {
 
 
     # ========================================================
-    # Final status
+    # Final Docker status
     # ========================================================
 
-    Write-Host 'Final Docker Compose status:'
+    Write-Host (
+        'Final Docker Compose status:'
+    )
 
 
     & docker compose `
@@ -898,11 +1136,14 @@ try {
 
 
     Write-Host (
-        "Deployment completed. " +
+        'Deployment completed. ' +
         "Local gateway: http://127.0.0.1:$hostPort"
     )
 
-    Write-Host "Public URL: $publicBaseUrl"
+
+    Write-Host (
+        "Public URL: $publicBaseUrl"
+    )
 }
 catch {
 
@@ -910,16 +1151,19 @@ catch {
 
 
     Write-Error (
-        "Application deployment failed: " +
-        "$($deploymentError.Exception.Message)"
+        'Application deployment failed: ' +
+        $deploymentError.Exception.Message
     )
 
+
+    # ========================================================
+    # 실패 시 현재 컨테이너 상태
+    # ========================================================
 
     try {
 
         Write-Host (
-            'Docker Compose status ' +
-            'after deployment failure:'
+            'Docker Compose status after deployment failure:'
         )
 
 
@@ -929,8 +1173,13 @@ catch {
             Out-Host
     }
     catch {
+        # 진단 실패가 원래 오류를 덮지 않도록 무시
     }
 
+
+    # ========================================================
+    # 실패 시 최근 로그
+    # ========================================================
 
     try {
 
@@ -948,8 +1197,13 @@ catch {
             Out-Host
     }
     catch {
+        # 로그 조회 실패가 원래 오류를 덮지 않도록 무시
     }
 
+
+    # ========================================================
+    # Rollback
+    # ========================================================
 
     Try-RollbackImages `
         -PreviousCommit $RollbackCommit `
@@ -964,8 +1218,11 @@ catch {
 }
 finally {
 
-    # 임시 Docker 인증 파일에는 GitHub Token 정보가
-    # 포함되므로 성공/실패 여부와 관계없이 삭제한다.
+    # ========================================================
+    # GHCR 임시 인증정보 제거
+    #
+    # 성공/실패와 상관없이 반드시 실행.
+    # ========================================================
 
     Remove-DockerSshConfig `
         -DockerConfigPath $temporaryDockerConfig

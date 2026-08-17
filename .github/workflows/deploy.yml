@@ -161,10 +161,10 @@ jobs:
           MARIADB_USER: ${{ vars.MARIADB_USER || 'dahum_app' }}
 
           # 실제 DB 사용자 비밀번호
-          MARIADB_PASSWORD: ${{ secrets.MARIADB_PASSWORD }}
+          MARIADB_PASSWORD: ${{ secrets.MARIADBPASSWORD }}
 
           # MariaDB 관리자 비밀번호
-          MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADB_ROOT_PASSWORD }}
+          MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADBROOTPASSWORD }}
 
 
           # --------------------------------------------------
@@ -178,7 +178,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: ${{ vars.SPRING_DATASOURCE_USERNAME || 'dahum_app' }}
 
           # MariaDB 앱 비밀번호와 동일한 Secret 사용
-          SPRING_DATASOURCE_PASSWORD: ${{ secrets.MARIADB_PASSWORD }}
+          SPRING_DATASOURCE_PASSWORD: ${{ secrets.MARIADBPASSWORD }}
 
           SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
 

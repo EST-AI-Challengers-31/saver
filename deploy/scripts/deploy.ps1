@@ -796,47 +796,37 @@ Set-Location `
     $AppPath
 
 
-    if (-not $SkipGitUpdate) {
+if (-not $SkipGitUpdate) {
 
     # 현재 commit을 rollback용으로 저장
     if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
-
         $RollbackCommit = (
             git rev-parse HEAD
         ).Trim()
     }
-
 
     git fetch `
         --prune `
         origin `
         main
 
-
     if ($LASTEXITCODE -ne 0) {
-
         throw 'git fetch failed.'
     }
 
-
     git checkout main
 
-
     if ($LASTEXITCODE -ne 0) {
-
         throw 'git checkout main failed.'
     }
 
-
-    # local 변경사항 무시하고 최신 origin/main으로 강제 복구
-    git reset `
-        --hard `
-        origin/main
-
+    git pull `
+        --ff-only `
+        origin `
+        main
 
     if ($LASTEXITCODE -ne 0) {
-
-        throw 'git reset failed.'
+        throw 'git pull failed.'
     }
 }
     # 로컬 변경 사항을 무시하고 최신 origin/main 상태로 강제 복구

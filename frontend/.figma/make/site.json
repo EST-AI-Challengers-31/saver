@@ -1,0 +1,10 @@
+{
+  "description": "Analyze mobile apps for malware similarity and risks using detection data, enabling users to identify potential threats and protect personal information.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

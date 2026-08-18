@@ -1,0 +1,8 @@
+pandas
+openpyxl
+matplotlib
+scikit-learn
+joblib
+
+# 새 환경에서 설치
+# pip install -r requirements.txt

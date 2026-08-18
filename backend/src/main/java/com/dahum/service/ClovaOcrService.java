@@ -12,6 +12,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ClovaOcrService {
@@ -22,52 +23,130 @@ public class ClovaOcrService {
     @Value("${clova.ocr.secret}")
     private String ocrSecret;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper =
+            new ObjectMapper();
 
-    public List<String> extractText(MultipartFile file) {
+
+    // OCR 결과 임시 저장
+    private final Map<String, List<String>> ocrResults =
+            new ConcurrentHashMap<>();
+
+
+    // ==========================================
+    // OCR 실행
+    // ==========================================
+
+    public String processOcr(MultipartFile file) {
 
         try {
-            RestTemplate restTemplate = new RestTemplate();
 
-            Map<String, Object> message = new HashMap<>();
-            message.put("version", "V2");
-            message.put("requestId", UUID.randomUUID().toString());
-            message.put("timestamp", System.currentTimeMillis());
-            message.put("lang", "ko");
+            RestTemplate restTemplate =
+                    new RestTemplate();
 
-            Map<String, String> imageInfo = new HashMap<>();
-            imageInfo.put("format", getExtension(file));
-            imageInfo.put("name", "upload");
 
+            // OCR ID 생성
+            String ocrId =
+                    UUID.randomUUID().toString();
+
+
+            // CLOVA OCR 요청 JSON
+            Map<String, Object> message =
+                    new HashMap<>();
+
+            message.put(
+                    "version",
+                    "V2"
+            );
+
+            message.put(
+                    "requestId",
+                    UUID.randomUUID().toString()
+            );
+
+            message.put(
+                    "timestamp",
+                    System.currentTimeMillis()
+            );
+
+            message.put(
+                    "lang",
+                    "ko"
+            );
+
+
+            Map<String, String> imageInfo =
+                    new HashMap<>();
+
+            imageInfo.put(
+                    "format",
+                    getExtension(file)
+            );
+
+            imageInfo.put(
+                    "name",
+                    "upload"
+            );
+
+            // api 이미지
             message.put(
                     "images",
                     Collections.singletonList(imageInfo)
             );
 
+
             String messageJson =
                     objectMapper.writeValueAsString(message);
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-            headers.set("X-OCR-SECRET", ocrSecret);
 
+            // Header
+            HttpHeaders headers =
+                    new HttpHeaders();
+
+            headers.setContentType(
+                    MediaType.MULTIPART_FORM_DATA
+            );
+
+            headers.set(
+                    "X-OCR-SECRET",
+                    ocrSecret
+            );
+
+
+            // 이미지 파일
             ByteArrayResource imageResource =
-                    new ByteArrayResource(file.getBytes()) {
+                    new ByteArrayResource(
+                            file.getBytes()
+                    ) {
+
                         @Override
                         public String getFilename() {
                             return file.getOriginalFilename();
                         }
                     };
 
+
             MultiValueMap<String, Object> body =
                     new LinkedMultiValueMap<>();
 
-            body.add("message", messageJson);
-            body.add("file", imageResource);
+            body.add(
+                    "message",
+                    messageJson
+            );
+
+            body.add(
+                    "file",
+                    imageResource
+            );
+
 
             HttpEntity<MultiValueMap<String, Object>> request =
-                    new HttpEntity<>(body, headers);
+                    new HttpEntity<>(
+                            body,
+                            headers
+                    );
 
+
+            // CLOVA OCR 호출
             ResponseEntity<String> response =
                     restTemplate.postForEntity(
                             ocrUrl,
@@ -75,56 +154,125 @@ public class ClovaOcrService {
                             String.class
                     );
 
+
+            // 결과 Parsing
             JsonNode root =
-                    objectMapper.readTree(response.getBody());
+                    objectMapper.readTree(
+                            response.getBody()
+                    );
 
-            List<String> texts = new ArrayList<>();
 
-            JsonNode images = root.get("images");
+            List<String> texts =
+                    new ArrayList<>();
+
+
+            JsonNode images =
+                    root.get("images");
+
 
             if (images != null && images.isArray()) {
+
                 for (JsonNode image : images) {
 
-                    JsonNode fields = image.get("fields");
+                    JsonNode fields =
+                            image.get("fields");
 
                     if (fields == null) {
                         continue;
                     }
 
+
                     for (JsonNode field : fields) {
+
                         JsonNode inferText =
                                 field.get("inferText");
 
+
                         if (inferText != null) {
-                            texts.add(inferText.asText());
+
+                            texts.add(
+                                    inferText.asText()
+                            );
                         }
                     }
                 }
             }
 
-            return texts;
+
+            // OCR 결과 저장
+            ocrResults.put(
+                    ocrId,
+                    texts
+            );
+
+
+            return ocrId;
+
 
         } catch (Exception e) {
+
             throw new RuntimeException(
-                    "CLOVA OCR 처리 중 오류가 발생했습니다.",
+                    "CLOVA OCR 처리 실패",
                     e
             );
         }
     }
 
-    private String getExtension(MultipartFile file) {
 
-        String filename = file.getOriginalFilename();
+    // ==========================================
+    // OCR 결과 조회
+    // ==========================================
+
+    public Map<String, Object> getOcrResult(
+            String ocrId
+    ) {
+
+        List<String> texts =
+                ocrResults.get(ocrId);
+
+
+        if (texts == null) {
+
+            return Map.of(
+                    "ocrId", ocrId,
+                    "status", "NOT_FOUND"
+            );
+        }
+
+
+        return Map.of(
+                "ocrId", ocrId,
+                "status", "COMPLETED",
+                "texts", texts
+        );
+    }
+
+
+    // ==========================================
+    // 파일 확장자 확인
+    // ==========================================
+
+    private String getExtension(
+            MultipartFile file
+    ) {
+
+        String filename =
+                file.getOriginalFilename();
+
 
         if (filename == null) {
             return "png";
         }
 
-        int dotIndex = filename.lastIndexOf(".");
+
+        int dotIndex =
+                filename.lastIndexOf(".");
+
 
         if (dotIndex == -1) {
             return "png";
         }
+
 
         return filename
                 .substring(dotIndex + 1)

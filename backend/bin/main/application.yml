@@ -31,3 +31,10 @@ dahum:
     base-url: ${AI_BASE_URL}
 
   public-base-url: ${PUBLIC_BASE_URL}
+
+
+# clova_ocr_url 코드 추가
+clova:
+  ocr:
+    url: ${CLOVA_OCR_URL}
+    secret: ${CLOVA_OCR_SECRET}

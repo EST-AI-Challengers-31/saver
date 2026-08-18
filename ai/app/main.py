@@ -8,6 +8,7 @@ from langchain_pinecone import PineconeVectorStore
 from langchain_core.documents import Document
 from dotenv import load_dotenv
 from app.llm import generate_explanation
+from app.rerank import search_candidates, rerank_with_llm
 
 load_dotenv()
 
@@ -81,10 +82,6 @@ def build_index(csv_path: str, batch_size: int = 100):
 # ---------------------------------------------------------
 def check_app(package_name: str) -> dict:
     
-    # 백엔드가 Exact Match 실패 시 호출.
-    # 입력: package_name (OCR로 추출된 패키지명)
-    # 출력: risk_level, similarity_score, matched_examples, ai_explanation
-    
     vectorstore = get_vectorstore()
 
     # package를 자연어처럼 토큰화 (com.fake.bank -> com fake bank)
@@ -98,15 +95,26 @@ def check_app(package_name: str) -> dict:
     else:
         # LangChain Pinecone 결과는 (Document, score) 튜플
         top_score = results[0][1]
-        matched_examples = [
-            {
-                "malware_name": doc.metadata["malware_name"],
-                "malware_category": doc.metadata["malware_category"],
-                "score": score,
-            }
-            for doc, score in results
-        ]
         risk_level = "MEDIUM" if top_score >= SIMILARITY_THRESHOLD else "UNKNOWN"
+        candidates = search_candidates(query_text, top_k=10)
+        if candidates:
+            reranked = rerank_with_llm(query_text, candidates, top_n=TOP_K)
+            matched_examples = [
+                {
+                    "malware_name": c["malware_name"],
+                    "malware_category": c["category"],
+                    "score": c["similarity"],
+                }
+                for c in reranked
+            ]
+        else: matched_examples = [
+                {
+                    "malware_name": doc.metadata["malware_name"],
+                    "malware_category": doc.metadata["malware_category"],
+                    "score": score,
+                }
+                for doc, score in results
+            ]
 
     explanation = generate_explanation(risk_level, matched_examples)
 
@@ -134,8 +142,8 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     results = [
         AppResult(
             패키지명=pkg,
-            child_message="자녀용 임시",
-            parent_message="부모용 임시",
+            child_message=raw["ai_explanation"]["child_message"],
+            parent_message=raw["ai_explanation"]["parent_message"],
         )
         for pkg, raw in zip(request.패키지명, raw_results)
     ]

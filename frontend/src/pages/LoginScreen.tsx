@@ -15,39 +15,17 @@ function LoginStatusBar() {
       </p>
       <div className="flex gap-[6px] items-center">
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgLogin.pc062070}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgLogin.pc062070} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgLogin.p23837e00}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgLogin.p23837e00} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="h-[18px] relative shrink-0 w-[26px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 26 18"
-          >
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 26 18">
             <path d={svgLogin.p1f206500} fill="#0F172A" />
           </svg>
         </div>
@@ -69,6 +47,17 @@ export function LoginScreen({
   onShowTerms,
   onShowPrivacy,
 }: LoginScreenProps) {
+
+  // 🌟 [추가됨] 카카오 로그인 인증 서버로 리다이렉트시키는 함수
+  const handleKakaoLogin = () => {
+    const CLIENT_ID = import.meta.env.VITE_KAKAO_CLIENT_ID
+    const REDIRECT_URI = window.location.origin // 현재 도메인 주소 (예: http://localhost:5173)
+
+    const KAKAO_AUTH_URL = `https://kauth.kakao.com/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code`
+    
+    window.location.href = KAKAO_AUTH_URL
+  }
+
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full h-full min-h-0">
       <div className="flex flex-col items-start w-full">
@@ -99,9 +88,10 @@ export function LoginScreen({
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] w-full">
         <div className="flex flex-col gap-[16px] w-full">
+          {/* 🌟 [수정됨] onNext 대신 실제 카카오 리다이렉트 함수인 handleKakaoLogin 연결 */}
           <button
-            onClick={onNext}
-            className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full"
+            onClick={handleKakaoLogin}
+            className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full cursor-pointer hover:bg-[#fdd835] transition-all"
           >
             <svg
               className="shrink-0 size-[22px]"

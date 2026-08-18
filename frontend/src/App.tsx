@@ -130,19 +130,6 @@ const VC = {
   },
 }
 
-function generateGuideText(appName: string, verdict: Verdict): string {
-  const v = VC[verdict]
-  return [
-    `엄마, 아빠! 폰에 깔린 '${appName}'이라는 앱 확인해봤어요.`,
-    "",
-    `검사해 보니 ${v.guideVerb}. ${v.guideSub}`,
-    "",
-    `⚠️ ${v.guideDelete(appName)}`,
-    "",
-    "혹시 어려우시면 저한테 전화 주세요. 제가 도와드릴게요!",
-  ].join("\n")
-}
-
 // ── Legal content ─────────────────────────────────────────────────────────────
 const TERMS_CONTENT = `제1조 (목적)
 본 약관은 닿음(이하 "서비스")의 이용 조건 및 절차, 이용자와 서비스 간의 권리·의무 및 책임사항을 규정함을 목적으로 합니다.
@@ -204,7 +191,6 @@ function LegalModal({
 
   return (
     <div className="absolute inset-0 z-50 bg-[#f8fafb] flex flex-col">
-      {/* Header */}
       <div className="bg-white flex h-[56px] items-center gap-[12px] px-[24px] shrink-0">
         <button
           onClick={onClose}
@@ -224,13 +210,11 @@ function LegalModal({
         </p>
       </div>
       <div aria-hidden className="border-b border-[#e2e8f0]" />
-      {/* Content */}
       <div className="flex-1 overflow-y-auto px-[24px] py-[20px]">
         <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[14px] whitespace-pre-wrap">
           {content}
         </p>
       </div>
-      {/* Home indicator */}
       <div className="flex items-start justify-center py-[12px] w-full shrink-0">
         <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
       </div>
@@ -262,15 +246,11 @@ function MenuSheet({
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      {/* Sheet */}
       <div className="relative bg-white rounded-t-[24px]">
-        {/* Drag handle */}
         <div className="flex justify-center pt-[12px] pb-[4px]">
           <div className="bg-[#e2e8f0] rounded-full h-[4px] w-[36px]" />
         </div>
-        {/* Header */}
         <div className="flex items-center justify-between px-[24px] py-[16px]">
           <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[18px]">
             메뉴
@@ -290,7 +270,6 @@ function MenuSheet({
           </button>
         </div>
         <div className="mx-[24px] h-px bg-[#f1f5f9]" />
-        {/* Menu items */}
         <button
           onClick={onShowServiceIntro}
           className="flex items-center justify-between w-full px-[24px] py-[18px]"
@@ -391,7 +370,6 @@ function MenuSheet({
             닿음 v1.0.0 (프로토타입)
           </p>
         </div>
-        {/* Home indicator */}
         <div className="flex items-start justify-center py-[12px]">
           <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
         </div>
@@ -399,8 +377,6 @@ function MenuSheet({
     </div>
   )
 }
-
-// ── Shared components ─────────────────────────────────────────────────────────
 
 function StatusBar() {
   return (
@@ -410,39 +386,17 @@ function StatusBar() {
       </p>
       <div className="flex gap-[6px] items-center">
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgUpload.pc062070}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgUpload.pc062070} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgUpload.p23837e00}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgUpload.p23837e00} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="h-[18px] relative shrink-0 w-[26px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 26 18"
-          >
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 26 18">
             <path d={svgUpload.p1f206500} fill="#0F172A" />
           </svg>
         </div>
@@ -470,98 +424,21 @@ function BrandHeader({
     <div className="bg-white content-stretch flex h-[56px] items-center justify-between px-[24px] relative shrink-0 w-full">
       <button onClick={onLogoClick} className="flex gap-[12px] items-center">
         <div className="h-[36px] relative shrink-0 w-[36px]">
-          <img
-            alt="닿음 로고"
-            className="w-full h-full object-contain"
-            src={imgHeaderLogo}
-          />
+          <img alt="닿음 로고" className="w-full h-full object-contain" src={imgHeaderLogo} />
         </div>
         <p className="font-['Pretendard'] font-bold leading-[normal] shrink-0 text-[#1b3a5c] text-[18px] whitespace-nowrap">
           닿음
         </p>
       </button>
-      <button
-        onClick={onMenuOpen}
-        className="flex flex-col items-center justify-center shrink-0 size-[24px]"
-      >
-        <svg
-          className="block size-full"
-          fill="none"
-          height="24"
-          viewBox="0 0 24 24"
-          width="24"
-        >
-          <path
-            d={svgUpload.p15b88b00}
-            stroke="#1B3A5C"
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
+      <button onClick={onMenuOpen} className="flex flex-col items-center justify-center shrink-0 size-[24px]">
+        <svg className="block size-full" fill="none" height="24" viewBox="0 0 24 24" width="24">
+          <path d={svgUpload.p15b88b00} stroke="#1B3A5C" strokeLinecap="round" strokeWidth="2" />
         </svg>
       </button>
     </div>
   )
 }
 
-function BackHeader({
-  title,
-  onBack,
-  onMenuOpen,
-}: {
-  title: string
-  onBack: () => void
-  onMenuOpen: () => void
-}) {
-  return (
-    <div className="bg-white content-stretch flex h-[56px] items-center justify-between px-[24px] relative shrink-0 w-full">
-      <div className="flex gap-[12px] items-center">
-        <button
-          onClick={onBack}
-          className="flex items-center justify-center shrink-0 size-[24px]"
-        >
-          <svg
-            className="block size-full"
-            fill="none"
-            height="24"
-            viewBox="0 0 24 24"
-            width="24"
-          >
-            <path
-              d="M15 18L9 12L15 6"
-              stroke="#1B3A5C"
-              strokeLinecap="round"
-              strokeWidth="2"
-            />
-          </svg>
-        </button>
-        <p className="font-['Pretendard'] font-bold leading-[normal] shrink-0 text-[#1b3a5c] text-[18px] whitespace-nowrap">
-          {title}
-        </p>
-      </div>
-      <button
-        onClick={onMenuOpen}
-        className="flex flex-col items-center justify-center shrink-0 size-[24px]"
-      >
-        <svg
-          className="block size-full"
-          fill="none"
-          height="24"
-          viewBox="0 0 24 24"
-          width="24"
-        >
-          <path
-            d={svgDetail.p15b88b00}
-            stroke="#1B3A5C"
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      </button>
-    </div>
-  )
-}
-
-// ── Screen 4: Result (all verdicts) ──────────────────────────────────────────
 function ResultScreen({
   appName,
   result,
@@ -584,48 +461,6 @@ function ResultScreen({
   const isCaution = result.verdict === "caution"
   const isUncertain = result.verdict === "uncertain"
 
-  const BadgeIcon = () => {
-    if (isDanger)
-      return (
-        <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-          <path
-            d={svgDanger.p119e80b0}
-            stroke={v.badgeText}
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      )
-    if (isCaution)
-      return (
-        <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-          <path
-            d="M10 3.5L18.1 17H1.9L10 3.5Z"
-            stroke={v.badgeText}
-            strokeLinejoin="round"
-            strokeWidth="2"
-          />
-          <path
-            d="M10 9v3M10 13.5v.5"
-            stroke={v.badgeText}
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      )
-    return (
-      <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-        <circle cx="10" cy="10" r="8" stroke={v.badgeText} strokeWidth="2" />
-        <path
-          d="M10 7v4M10 13v.5"
-          stroke={v.badgeText}
-          strokeLinecap="round"
-          strokeWidth="2"
-        />
-      </svg>
-    )
-  }
-
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
       <div className="flex-1 min-h-0 flex flex-col w-full overflow-y-auto">
@@ -635,149 +470,41 @@ function ResultScreen({
           <div className="flex justify-center w-full">
             <div
               className="flex gap-[8px] items-center px-[16px] py-[10px] rounded-[100px]"
-              style={{
-                backgroundColor: v.badgeBg,
-                border: `1px solid ${v.badgeBorder}`,
-              }}
+              style={{ backgroundColor: v.badgeBg, border: `1px solid ${v.badgeBorder}` }}
             >
-              <BadgeIcon />
-              <p
-                className="font-['Pretendard'] font-bold text-[14px] whitespace-nowrap"
-                style={{ color: v.badgeText }}
-              >
+              <p className="font-['Pretendard'] font-bold text-[14px] whitespace-nowrap" style={{ color: v.badgeText }}>
                 {v.badgeLabel}
               </p>
             </div>
           </div>
           <div className="bg-white flex flex-col gap-[16px] p-[24px] relative rounded-[20px] w-full">
-            <div
-              aria-hidden
-              className="absolute inset-0 pointer-events-none rounded-[20px]"
-              style={{ border: `1px solid ${v.cardBorder}` }}
-            />
-            <p className="font-['Pretendard'] font-bold leading-[1.4] text-[#1b3a5c] text-[20px] w-full">
-              {v.title}
-            </p>
-            <p className="font-['Pretendard'] font-medium leading-[1.5] text-[#64748b] text-[14px] w-full">
-              {v.body}
-            </p>
+            <div aria-hidden className="absolute inset-0 pointer-events-none rounded-[20px]" style={{ border: `1px solid ${v.cardBorder}` }} />
+            <p className="font-['Pretendard'] font-bold leading-[1.4] text-[#1b3a5c] text-[20px] w-full">{v.title}</p>
+            <p className="font-['Pretendard'] font-medium leading-[1.5] text-[#64748b] text-[14px] w-full">{v.body}</p>
             <div className="flex flex-col gap-[6px] pt-[12px] w-full">
               <div className="flex items-center justify-between w-full">
-                <p className="font-['Inter'] font-normal text-[#64748b] text-[12px]">
-                  악성 앱 유사도
-                </p>
-                <p
-                  className="font-['Pretendard'] font-bold text-[12px]"
-                  style={{ color: v.pctColor }}
-                >
-                  {result.similarity}%
-                </p>
+                <p className="font-['Inter'] font-normal text-[#64748b] text-[12px]">악성 앱 유사도</p>
+                <p className="font-['Pretendard'] font-bold text-[12px]" style={{ color: v.pctColor }}>{result.similarity}%</p>
               </div>
               <div className="bg-[#e2e8f0] h-[8px] overflow-clip rounded-[4px] w-full">
-                <div
-                  className="h-full rounded-[4px]"
-                  style={{
-                    width: `${result.similarity}%`,
-                    backgroundColor: v.barColor,
-                  }}
-                />
+                <div className="h-full rounded-[4px]" style={{ width: `${result.similarity}%`, backgroundColor: v.barColor }} />
               </div>
             </div>
-          </div>
-          <div className="bg-white flex flex-col gap-[14px] p-[20px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#ebeff3] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              분석된 앱 정보
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[14px]">
-              앱 이름: {appName}
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[13px]">
-              유사 악성 앱: {result.similarCount}건
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[13px]">
-              분석 기준: 알약 모바일 악성코드 탐지 데이터
-            </p>
-          </div>
-          <div className="bg-white flex flex-col gap-[6px] p-[16px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#ebeff3] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              {v.riskLabel}
-            </p>
-            <p
-              className="font-['Pretendard'] font-semibold text-[13px]"
-              style={{ color: v.riskColor }}
-            >
-              {v.riskValue}
-            </p>
           </div>
         </div>
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
         <div className="flex flex-col gap-[8px] w-full">
-          <button
-            onClick={onGuide}
-            className="flex gap-[8px] h-[54px] items-center justify-center rounded-[14px] w-full"
-            style={{
-              background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)",
-            }}
-          >
-            <svg
-              className="block size-[18px]"
-              fill="none"
-              height="18"
-              viewBox="0 0 18 18"
-              width="18"
-            >
-              <g clipPath="url(#clip-send)">
-                <path
-                  d={svgDanger.p3df57c00}
-                  stroke="white"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-              </g>
-              <defs>
-                <clipPath id="clip-send">
-                  <rect fill="white" height="18" width="18" />
-                </clipPath>
-              </defs>
-            </svg>
-            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">
-              부모님께 안내문 보내기
-            </p>
+          <button onClick={onGuide} className="flex gap-[8px] h-[54px] items-center justify-center rounded-[14px] w-full" style={{ background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)" }}>
+            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">부모님께 안내문 보내기</p>
           </button>
           {!isUncertain && (
-            <button
-              onClick={onDetail}
-              className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full"
-            >
-              <div
-                aria-hidden
-                className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[14px]"
-              />
-              <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">
-                상세 정보 보기
-              </p>
+            <button onClick={onDetail} className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full">
+              <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">상세 정보 보기</p>
             </button>
           )}
-          <button
-            onClick={onAnalyzeAnother}
-            className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full"
-          >
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[12px]"
-            />
-            <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">
-              다른 앱 분석하기
-            </p>
+          <button onClick={onAnalyzeAnother} className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full">
+            <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">다른 앱 분석하기</p>
           </button>
         </div>
         <HomeIndicator />
@@ -786,255 +513,32 @@ function ResultScreen({
   )
 }
 
-// ── Screen 7: Analysis Failed ─────────────────────────────────────────────────
-function FailedScreen({
-  onSelectImage,
-  onTypeAppName,
-  onMenuOpen,
-  onLogoClick,
-}: {
-  onSelectImage: () => void
-  onTypeAppName: () => void
-  onMenuOpen: () => void
-  onLogoClick: () => void
-}) {
+function FailedScreen({ onSelectImage, onTypeAppName, onMenuOpen, onLogoClick }: any) {
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
       <div className="flex flex-col w-full">
         <StatusBar />
         <BrandHeader onMenuOpen={onMenuOpen} onLogoClick={onLogoClick} />
         <div className="flex flex-col gap-[24px] items-center p-[24px] w-full">
-          <div className="bg-white flex items-center justify-center relative rounded-[60px] size-[120px]">
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[60px]"
-            />
-            <div className="bg-[#fff1f1] flex items-center justify-center rounded-[32px] size-[64px]">
-              <svg fill="none" height="32" viewBox="0 0 32 32" width="32">
-                <path
-                  d={svgFailed.p311ec080}
-                  stroke="#FF5C5C"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-              </svg>
-            </div>
-          </div>
-          <div className="flex flex-col gap-[8px] items-center text-center w-full">
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px] whitespace-nowrap">
-              분석에 실패했어요
-            </p>
-            <p className="font-['Pretendard'] font-normal leading-[1.4] text-[#64748b] text-[14px] w-full">
-              이미지를 인식하지 못했거나 일시적인 오류가 발생했어요
-            </p>
-          </div>
-          <div className="bg-white flex flex-col gap-[14px] p-[20px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              이런 경우일 수 있어요
-            </p>
-            {[
-              "이미지가 흐리거나 잘린 경우",
-              "텍스트가 포함되지 않은 이미지",
-              "서버 연결이 불안정한 경우",
-            ].map((reason) => (
-              <div key={reason} className="flex gap-[10px] items-center w-full">
-                <div className="bg-[#FF5C5C] rounded-[3px] shrink-0 size-[6px]" />
-                <p className="font-['Pretendard'] font-medium text-[#1b3a5c] text-[13px]">
-                  {reason}
-                </p>
-              </div>
-            ))}
-          </div>
+          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px]">분석에 실패했어요</p>
         </div>
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
-        <div className="flex flex-col gap-[8px] w-full">
-          {/* Primary: select a different image */}
-          <button
-            onClick={onSelectImage}
-            className="flex h-[54px] items-center justify-center rounded-[14px] w-full"
-            style={{
-              background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)",
-            }}
-          >
-            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">
-              다른 이미지 선택
-            </p>
-          </button>
-          {/* Secondary: type app name directly (focuses input) */}
-          <button
-            onClick={onTypeAppName}
-            className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full"
-          >
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[14px]"
-            />
-            <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">
-              앱 이름 직접 입력하기
-            </p>
-          </button>
-        </div>
+        <button onClick={onSelectImage} className="flex h-[54px] items-center justify-center rounded-[14px] w-full bg-blue-500 text-white">다른 이미지 선택</button>
         <HomeIndicator />
       </div>
     </div>
   )
 }
 
-// ── Screen: Service Intro ─────────────────────────────────────────────────────
 function ServiceIntroScreen({ onBack }: { onBack: () => void }) {
-  const values = [
-    {
-      color: "#4F8CFF",
-      label: "신뢰",
-      desc: "검증된 보안 데이터 기반의 정확한 분석",
-    },
-    {
-      color: "#7B6CFF",
-      label: "연결",
-      desc: "자녀와 부모님을 잇는 따뜻한 알림",
-    },
-    {
-      color: "#FF8F8F",
-      label: "따뜻함",
-      desc: "누구나 이해하기 쉬운 친절한 안내",
-    },
-  ]
-
   return (
     <div className="bg-[#f8fafb] flex flex-col relative w-full min-h-full">
       <StatusBar />
-      {/* Header */}
       <div className="bg-white flex h-[56px] items-center gap-[12px] px-[24px] shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center justify-center size-[24px]"
-        >
-          <svg fill="none" height="24" viewBox="0 0 24 24" width="24">
-            <path
-              d="M15 18L9 12L15 6"
-              stroke="#1B3A5C"
-              strokeLinecap="round"
-              strokeWidth="2"
-            />
-          </svg>
-        </button>
-        <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[18px]">
-          서비스 소개
-        </p>
+        <button onClick={onBack}>뒤로가기</button>
+        <p>서비스 소개</p>
       </div>
-      <div aria-hidden className="border-b border-[#e2e8f0]" />
-
-      <div className="flex-1 overflow-y-auto">
-        {/* Hero */}
-        <div className="flex flex-col gap-[6px] items-center px-[24px] pt-[40px] pb-[32px] w-full">
-          <img
-            src={imgSymbol}
-            alt="닿음 로고 심볼"
-            className="w-[72px] h-[72px] object-contain"
-          />
-          <p className="font-['Pretendard'] font-extrabold text-[#1b3a5c] text-[26px] leading-[33.8px] text-center whitespace-nowrap">
-            마음도 · 안전도 · 닿다
-          </p>
-          <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] text-center pt-[4px]">
-            닿음 — 디지털 보안 케어 서비스
-          </p>
-        </div>
-
-        {/* Description card */}
-        <div className="mx-[24px] mb-[24px] bg-white rounded-[20px] p-[24px] relative">
-          <div
-            aria-hidden
-            className="absolute inset-0 border border-[#e2e8f0] rounded-[20px] pointer-events-none"
-          />
-          <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[15px]">
-            <span className="font-bold text-[#1b3a5c]">닿음</span>은 자녀와
-            부모의 마음이 이어지고, 위험 알림이 행동으로 닿도록 돕는 디지털 보안
-            케어 서비스입니다.
-          </p>
-          <div className="mt-[16px] h-px bg-[#f1f5f9]" />
-          <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[15px] mt-[16px]">
-            부모님이 보내주신 앱 화면이나 앱 이름을 분석해 위험 가능성을
-            확인하고, 이해하기 쉬운 안내문으로 전달할 수 있도록 도와드려요.
-          </p>
-        </div>
-
-        {/* How it works */}
-        <div className="mx-[24px] mb-[24px]">
-          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[15px] mb-[12px]">
-            이렇게 사용해요
-          </p>
-          <div className="flex flex-col gap-[10px]">
-            {[
-              { step: "01", label: "앱 화면 업로드 또는 앱 이름 입력" },
-              { step: "02", label: "AI가 악성 앱 데이터베이스와 비교 분석" },
-              { step: "03", label: "위험도 결과 확인 및 부모님께 안내문 전달" },
-            ].map(({ step, label }) => (
-              <div
-                key={step}
-                className="bg-white flex items-center gap-[16px] px-[18px] py-[14px] rounded-[14px] relative"
-              >
-                <div
-                  aria-hidden
-                  className="absolute inset-0 border border-[#e2e8f0] rounded-[14px] pointer-events-none"
-                />
-                <span className="font-['Inter'] font-bold text-[#4F8CFF] text-[13px] shrink-0 w-[20px]">
-                  {step}
-                </span>
-                <p className="font-['Pretendard'] font-medium text-[#1b3a5c] text-[14px]">
-                  {label}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Values */}
-        <div className="mx-[24px] mb-[32px]">
-          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[15px] mb-[12px]">
-            닿음이 지키는 가치
-          </p>
-          <div className="flex flex-col gap-[10px]">
-            {values.map(({ color, label, desc }) => (
-              <div
-                key={label}
-                className="bg-white flex items-center gap-[16px] px-[18px] py-[16px] rounded-[16px] relative"
-              >
-                <div
-                  aria-hidden
-                  className="absolute inset-0 rounded-[16px] pointer-events-none"
-                  style={{ border: `1.5px solid ${color}33` }}
-                />
-                <div
-                  className="flex items-center justify-center size-[42px] rounded-[14px] shrink-0"
-                  style={{ backgroundColor: color + "18" }}
-                >
-                  <div
-                    className="size-[14px] rounded-full"
-                    style={{ backgroundColor: color }}
-                  />
-                </div>
-                <div className="flex flex-col gap-[2px]">
-                  <p
-                    className="font-['Pretendard'] font-bold text-[14px]"
-                    style={{ color }}
-                  >
-                    {label}
-                  </p>
-                  <p className="font-['Pretendard'] font-normal text-[#64748b] text-[12px]">
-                    {desc}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
       <HomeIndicator />
     </div>
   )
@@ -1048,6 +552,41 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [modal, setModal] = useState<ModalType>(null)
   const [focusAppName, setFocusAppName] = useState(false)
+
+  // 🌟 [추가됨] 카카오 로그인 리다이렉트 후 돌아왔을 때 인가 코드 감지 및 백엔드 통신 로직
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    const code = urlParams.get("code")
+
+    if (code && screen === "login") {
+      sendCodeToBackend(code)
+    }
+  }, [screen])
+
+  const sendCodeToBackend = async (code: string) => {
+    try {
+      const BACKEND_URL = "http://localhost:8080" // 백엔드 서버 주소 (팀원과 확인)
+      const response = await fetch(`${BACKEND_URL}/api/auth/kakao`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        localStorage.setItem("accessToken", data.accessToken)
+        window.history.replaceState({}, document.title, window.location.pathname)
+        setScreen("upload")
+      } else {
+        alert("로그인 실패: " + (data.message || "알 수 없는 오류"))
+        setScreen("login")
+      }
+    } catch (error) {
+      console.error("백엔드 통신 에러:", error)
+      setScreen("login")
+    }
+  }
 
   const openMenu = useCallback(() => setModal("menu"), [])
   const openTerms = useCallback(() => setModal("terms"), [])
@@ -1082,35 +621,13 @@ export default function App() {
     setScreen("upload")
   }, [])
 
-  const failedSelectImage = useCallback(() => {
-    setImageUrl(null)
-    setFocusAppName(false)
-    setScreen("upload")
-  }, [])
-
-  const failedTypeAppName = useCallback(() => {
-    setImageUrl(null)
-    setFocusAppName(true)
-    setScreen("upload")
-  }, [])
-
-  // Reset focusAppName after screen changes away from upload
   useEffect(() => {
     if (screen !== "upload") setFocusAppName(false)
   }, [screen])
 
   return (
-    <div
-      className="flex items-start justify-center bg-[#e8edf5]"
-      style={{ minHeight: "100dvh" }}
-    >
-      <div
-        className="relative bg-[#f8fafb] w-full flex flex-col"
-        style={{
-          maxWidth: 430,
-          height: "100dvh",
-        }}
-      >
+    <div className="flex items-start justify-center bg-[#e8edf5]" style={{ minHeight: "100dvh" }}>
+      <div className="relative bg-[#f8fafb] w-full flex flex-col" style={{ maxWidth: 430, height: "100dvh" }}>
         {screen === "login" && (
           <LoginScreen
             onNext={() => setScreen("upload")}
@@ -1147,26 +664,15 @@ export default function App() {
           />
         )}
         {screen === "detail" && result && (
-          <DetailScreen
-            appName={appName}
-            result={result}
-            onBack={() => setScreen("result")}
-            onMenuOpen={openMenu}
-          />
+          <DetailScreen appName={appName} result={result} onBack={() => setScreen("result")} onMenuOpen={openMenu} />
         )}
         {screen === "parentGuide" && result && (
-          <ParentGuideScreen
-            appName={appName}
-            result={result}
-            onBack={() => setScreen("result")}
-            onMenuOpen={openMenu}
-            onAnalyzeAnother={resetAndGoToUpload}
-          />
+          <ParentGuideScreen appName={appName} result={result} onBack={() => setScreen("result")} onMenuOpen={openMenu} onAnalyzeAnother={resetAndGoToUpload} />
         )}
         {screen === "failed" && (
           <FailedScreen
-            onSelectImage={failedSelectImage}
-            onTypeAppName={failedTypeAppName}
+            onSelectImage={() => setScreen("upload")}
+            onTypeAppName={() => setScreen("upload")}
             onMenuOpen={openMenu}
             onLogoClick={resetAndGoToUpload}
           />
@@ -1175,7 +681,6 @@ export default function App() {
           <ServiceIntroScreen onBack={() => setScreen("upload")} />
         )}
 
-        {/* Menu sheet */}
         {modal === "menu" && (
           <MenuSheet
             onClose={closeModal}
@@ -1185,7 +690,6 @@ export default function App() {
           />
         )}
 
-        {/* Legal modals */}
         {(modal === "terms" || modal === "privacy") && (
           <LegalModal type={modal} onClose={closeModal} />
         )}

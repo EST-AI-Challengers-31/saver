@@ -796,7 +796,7 @@ Set-Location `
     $AppPath
 
 
-if (-not $SkipGitUpdate) {
+    if (-not $SkipGitUpdate) {
 
     # 현재 commit을 rollback용으로 저장
     if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {

@@ -153,9 +153,9 @@ const TERMS_CONTENT = `제1조 (목적)
 
 const PRIVACY_CONTENT = `1. 수집하는 개인정보
 본 서비스는 다음의 개인정보를 수집합니다.
-• 카카오 계정 정보 (이름, 프로필 이미지, 이메일)
 • 앱 분석을 위해 업로드한 이미지
 • 서비스 이용 기록 및 접속 로그
+• 사용자가 직접 입력한 앱 정보
 
 2. 개인정보 이용 목적
 수집된 정보는 다음 목적으로만 활용됩니다.
@@ -552,41 +552,6 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [modal, setModal] = useState<ModalType>(null)
   const [focusAppName, setFocusAppName] = useState(false)
-
-  // 🌟 [추가됨] 카카오 로그인 리다이렉트 후 돌아왔을 때 인가 코드 감지 및 백엔드 통신 로직
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const code = urlParams.get("code")
-
-    if (code && screen === "login") {
-      sendCodeToBackend(code)
-    }
-  }, [screen])
-
-  const sendCodeToBackend = async (code: string) => {
-    try {
-      const BACKEND_URL = "http://localhost:8080" // 백엔드 서버 주소 (팀원과 확인)
-      const response = await fetch(`${BACKEND_URL}/api/auth/kakao`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        localStorage.setItem("accessToken", data.accessToken)
-        window.history.replaceState({}, document.title, window.location.pathname)
-        setScreen("upload")
-      } else {
-        alert("로그인 실패: " + (data.message || "알 수 없는 오류"))
-        setScreen("login")
-      }
-    } catch (error) {
-      console.error("백엔드 통신 에러:", error)
-      setScreen("login")
-    }
-  }
 
   const openMenu = useCallback(() => setModal("menu"), [])
   const openTerms = useCallback(() => setModal("terms"), [])

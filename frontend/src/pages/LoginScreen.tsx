@@ -78,7 +78,6 @@ export function LoginScreen({
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] w-full">
         <div className="flex flex-col gap-[16px] w-full">
-          {/* 🌟 [수정됨] onNext 대신 실제 카카오 리다이렉트 함수인 handleKakaoLogin 연결 */}
           <button
             onClick={onNext}
             className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full cursor-pointer hover:bg-[#fdd835] transition-all"

@@ -116,12 +116,11 @@ function CircleX() {
   );
 }
 
-function BtnGoogleLogin() {
+function BtnStart() {
   return (
-    <div className="bg-white content-stretch drop-shadow-[0px_1px_1px_rgba(15,23,42,0.03)] flex gap-[12px] h-[54px] items-center justify-center p-[16px] relative rounded-[14px] shrink-0 w-full" data-name="btn-google-login">
+    <div className="bg-white content-stretch drop-shadow-[0px_1px_1px_rgba(15,23,42,0.03)] flex gap-[12px] h-[54px] items-center justify-center p-[16px] relative rounded-[14px] shrink-0 w-full" data-name="btn-start">
       <div aria-hidden className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[14px]" />
-      <CircleX />
-      <p className="[word-break:break-word] font-['Pretendard:Bold',sans-serif] leading-[normal] not-italic relative shrink-0 text-[#0f172a] text-[16px] whitespace-nowrap">카카오톡으로 계속하기</p>
+      <p className="[word-break:break-word] font-['Pretendard:Bold',sans-serif] leading-[normal] not-italic relative shrink-0 text-[#0f172a] text-[16px] whitespace-nowrap">시작하기</p>
     </div>
   );
 }
@@ -129,7 +128,7 @@ function BtnGoogleLogin() {
 function LoginActions() {
   return (
     <div className="content-stretch flex flex-col gap-[16px] items-start relative shrink-0 w-full" data-name="login-actions">
-      <BtnGoogleLogin />
+      <BtnStart />
       <p className="[word-break:break-word] font-['Inter:Regular','Noto_Sans_KR:Regular',sans-serif] font-normal leading-[0] not-italic relative shrink-0 text-[#64748b] text-[11px] text-center w-full">
         <span className="leading-[normal]">{`계속하면 `}</span>
         <span className="[text-decoration-skip-ink:none] [text-underline-position:from-font] decoration-from-font decoration-solid leading-[normal] underline">이용약관</span>

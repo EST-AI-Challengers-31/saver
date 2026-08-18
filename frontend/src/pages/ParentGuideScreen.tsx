@@ -332,30 +332,16 @@ export function ParentGuideScreen({
               클립보드에 복사하기
             </p>
           </button>
-          <button className="bg-[#fee500] flex gap-[8px] h-[50px] items-center justify-center rounded-[14px] w-full">
-            <svg
-              className="block size-[18px]"
-              fill="none"
-              height="18"
-              viewBox="0 0 18 18"
-              width="18"
-            >
-              <g clipPath="url(#clip-kakao-guide)">
-                <path
-                  d={svgGuide.p16ccbb80}
-                  stroke="#181600"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-              </g>
-              <defs>
-                <clipPath id="clip-kakao-guide">
-                  <rect fill="white" height="18" width="18" />
-                </clipPath>
-              </defs>
-            </svg>
-            <p className="font-['Pretendard'] font-bold text-[#181600] text-[14px] whitespace-nowrap">
-              카카오톡으로 보내기
+          <button
+            onClick={onAnalyzeAnother}
+            className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full"
+          >
+            <div
+              aria-hidden
+              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[12px]"
+            />
+            <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">
+              다른 앱 분석하기
             </p>
           </button>
           <button

@@ -13,6 +13,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class ClovaOcrService {
@@ -27,8 +29,36 @@ public class ClovaOcrService {
             new ObjectMapper();
 
 
+    // ==========================================
+    // Android Package 정규식
+    // 예:
+    // com.kakao.talk
+    // com.nhn.android.search
+    // kr.co.example.app
+    // org.example.application
+    // ==========================================
+
+    private static final Pattern PACKAGE_PATTERN =
+            Pattern.compile(
+                    "\\b(?:[a-zA-Z][a-zA-Z0-9_]*\\.){2,}[a-zA-Z][a-zA-Z0-9_]*\\b"
+            );
+
+
+    // ==========================================
     // OCR 결과 임시 저장
+    // ocrId -> OCR 전체 텍스트
+    // ==========================================
+
     private final Map<String, List<String>> ocrResults =
+            new ConcurrentHashMap<>();
+
+
+    // ==========================================
+    // Package 결과 임시 저장
+    // ocrId -> 추출된 Package 목록
+    // ==========================================
+
+    private final Map<String, List<String>> packageResults =
             new ConcurrentHashMap<>();
 
 
@@ -49,7 +79,10 @@ public class ClovaOcrService {
                     UUID.randomUUID().toString();
 
 
+            // ==========================================
             // CLOVA OCR 요청 JSON
+            // ==========================================
+
             Map<String, Object> message =
                     new HashMap<>();
 
@@ -87,7 +120,7 @@ public class ClovaOcrService {
                     "upload"
             );
 
-            // api 이미지
+
             message.put(
                     "images",
                     Collections.singletonList(imageInfo)
@@ -98,7 +131,10 @@ public class ClovaOcrService {
                     objectMapper.writeValueAsString(message);
 
 
+            // ==========================================
             // Header
+            // ==========================================
+
             HttpHeaders headers =
                     new HttpHeaders();
 
@@ -112,7 +148,10 @@ public class ClovaOcrService {
             );
 
 
+            // ==========================================
             // 이미지 파일
+            // ==========================================
+
             ByteArrayResource imageResource =
                     new ByteArrayResource(
                             file.getBytes()
@@ -146,7 +185,10 @@ public class ClovaOcrService {
                     );
 
 
+            // ==========================================
             // CLOVA OCR 호출
+            // ==========================================
+
             ResponseEntity<String> response =
                     restTemplate.postForEntity(
                             ocrUrl,
@@ -155,7 +197,10 @@ public class ClovaOcrService {
                     );
 
 
-            // 결과 Parsing
+            // ==========================================
+            // OCR 결과 Parsing
+            // ==========================================
+
             JsonNode root =
                     objectMapper.readTree(
                             response.getBody()
@@ -190,19 +235,60 @@ public class ClovaOcrService {
 
                         if (inferText != null) {
 
-                            texts.add(
-                                    inferText.asText()
-                            );
+                            String text =
+                                    inferText.asText();
+
+                            texts.add(text);
                         }
                     }
                 }
             }
 
 
+            // ==========================================
+            // Package명 추출
+            // ==========================================
+
+            Set<String> packageSet =
+                    new LinkedHashSet<>();
+
+
+            // OCR이 단어 단위로 끊어서 반환하는 경우를 고려해
+            // 전체 OCR 문자열을 한 번 합친 후 정규식 검색
+            String combinedText =
+                    String.join(" ", texts);
+
+
+            Matcher matcher =
+                    PACKAGE_PATTERN.matcher(combinedText);
+
+
+            while (matcher.find()) {
+
+                String packageName =
+                        matcher.group();
+
+                packageSet.add(packageName);
+            }
+
+
+            List<String> packages =
+                    new ArrayList<>(packageSet);
+
+
+            // ==========================================
             // OCR 결과 저장
+            // ==========================================
+
             ocrResults.put(
                     ocrId,
                     texts
+            );
+
+
+            packageResults.put(
+                    ocrId,
+                    packages
             );
 
 
@@ -230,6 +316,9 @@ public class ClovaOcrService {
         List<String> texts =
                 ocrResults.get(ocrId);
 
+        List<String> packages =
+                packageResults.get(ocrId);
+
 
         if (texts == null) {
 
@@ -243,7 +332,11 @@ public class ClovaOcrService {
         return Map.of(
                 "ocrId", ocrId,
                 "status", "COMPLETED",
-                "texts", texts
+                "texts", texts,
+                "packages",
+                packages != null
+                        ? packages
+                        : Collections.emptyList()
         );
     }
 

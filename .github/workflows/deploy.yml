@@ -442,5 +442,5 @@ jobs:
 
           command_timeout: 20m
 
-          script: |
+           script: |
             cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout main && git pull --ff-only origin main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"

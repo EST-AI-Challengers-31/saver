@@ -796,7 +796,7 @@ Set-Location `
     $AppPath
 
 
-    if (-not $SkipGitUpdate) {
+if (-not $SkipGitUpdate) {
 
     # 현재 commit을 rollback용으로 저장
     if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
@@ -828,6 +828,17 @@ Set-Location `
     }
 
 
+    # local 변경사항 무시하고 최신 origin/main으로 강제 복구
+    git reset `
+        --hard `
+        origin/main
+
+
+    if ($LASTEXITCODE -ne 0) {
+
+        throw 'git reset failed.'
+    }
+}
     # 로컬 변경 사항을 무시하고 최신 origin/main 상태로 강제 복구
     git reset `
         --hard `

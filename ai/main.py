@@ -112,11 +112,16 @@ def check_app(package_name: str) -> dict:
         "ai_explanation": explanation,
     }
 
+ 
+def check_apps(package_names: list) -> list:
+    return [check_app(pkg) for pkg in package_names]
+
 
 # ---------------------------------------------------------
-# 3. LLM 설명 생성 (앨런 API 확정 전까지 인터페이스만)
+# 3. LLM 설명 생성 
 # ---------------------------------------------------------
 
 if __name__ == "__main__":
     # build_index("../datas/data/malware_embedding_data.csv")
-    print(check_app("com.lge.signboard.overlay"))
+    
+    print(check_apps(["com.fake.bank.secure", "카카오톡"]))

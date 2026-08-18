@@ -2,7 +2,6 @@ import imgLoginLogo from "@/imports/image-4.png"
 import svgLogin from "@/svg-rir42c0v4g"
 
 interface LoginScreenProps {
-  onNext: () => void
   onShowTerms: () => void
   onShowPrivacy: () => void
 }
@@ -43,19 +42,12 @@ function HomeIndicator() {
 }
 
 export function LoginScreen({
-  onNext,
   onShowTerms,
   onShowPrivacy,
 }: LoginScreenProps) {
 
-  // 🌟 [추가됨] 카카오 로그인 인증 서버로 리다이렉트시키는 함수
   const handleKakaoLogin = () => {
-    const CLIENT_ID = import.meta.env.VITE_KAKAO_CLIENT_ID
-    const REDIRECT_URI = window.location.origin // 현재 도메인 주소 (예: http://localhost:5173)
-
-    const KAKAO_AUTH_URL = `https://kauth.kakao.com/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code`
-    
-    window.location.href = KAKAO_AUTH_URL
+    window.location.assign("/oauth2/authorization/kakao")
   }
 
   return (
@@ -88,7 +80,6 @@ export function LoginScreen({
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] w-full">
         <div className="flex flex-col gap-[16px] w-full">
-          {/* 🌟 [수정됨] onNext 대신 실제 카카오 리다이렉트 함수인 handleKakaoLogin 연결 */}
           <button
             onClick={handleKakaoLogin}
             className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full cursor-pointer hover:bg-[#fdd835] transition-all"

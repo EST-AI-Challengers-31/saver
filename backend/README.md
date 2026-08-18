@@ -6,12 +6,14 @@ Spring Boot 3 / Java 21 메인 서버입니다.
 - `GET /api/health`
 - `GET /api/system/status`: MariaDB + FastAPI 연결 상태 확인
 - `POST /api/demo/check`: `malware_record` 정확일치 조회
+- `GET /api/me`: 로그인 사용자와 가족 정보 조회
+- Kakao OAuth2 로그인 및 서버 세션
+- `POST /api/ocr`: CLOVA OCR 업로드
 - React 빌드 결과를 Spring static으로 제공
 
 ## 아직 구현하지 않음
-- OAuth2 Kakao/Google
+- OAuth2 Google
 - 가족 도메인 API
-- OCR 업로드
 - 실제 AI 분석 orchestration
 
 배포 확인이 끝난 뒤 위 기능을 순서대로 추가합니다.

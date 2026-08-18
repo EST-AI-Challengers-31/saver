@@ -17,8 +17,12 @@ EMBEDDING_DIM = 4096  # solar-embedding-1-large 기준
 SIMILARITY_THRESHOLD = 0.8  # 이 이상이면 MEDIUM, 미만이면 UNKNOWN
 TOP_K = 3
 
-embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
 app = FastAPI(title="Dahum AI", version="0.1.0")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "UP", "service": "dahum-ai"}
 
 class AnalyzeRequest(BaseModel):
     패키지명: list[str]
@@ -37,6 +41,7 @@ class AnalyzeResponse(BaseModel):
 def get_vectorstore() -> PineconeVectorStore:
     # LangChain PineconeVectorStore 래퍼 반환 (인덱스 없으면 생성)
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
     if INDEX_NAME not in [i.name for i in pc.list_indexes()]:
         pc.create_index(
             name=INDEX_NAME,

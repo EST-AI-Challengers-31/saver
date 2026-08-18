@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 ALAN_API_URL = "https://kdt-api-function.azurewebsites.net/api/v1/question"
-ALAN_CLIENT_ID = os.environ["ALAN_CLIENT_ID"]
 
 # risk_level(HIGH/MEDIUM/UNKNOWN) -> 사용자에게 보여줄 3단계 라벨
 RISK_LABEL_MAP = {
@@ -72,7 +71,7 @@ def generate_explanation(risk_level: str, matched_examples: list) -> dict:
 
     response = requests.get(
         ALAN_API_URL,
-        params={"content": prompt, "client_id": ALAN_CLIENT_ID},
+        params={"content": prompt, "client_id": os.environ["ALAN_CLIENT_ID"]},
         timeout=120,
     )
     response.raise_for_status()

@@ -37,6 +37,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate deployment credentials
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          MARIADB_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
+          MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADBROOTPASSWORD }}
+          KAKAO_CLIENT_ID: ${{ secrets.KAKAOCLIENTID }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
+          ALAN_CLIENT_ID: ${{ secrets.ALAN_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            SERVER_HOST SERVER_USER MARIADB_PASSWORD MARIADB_ROOT_PASSWORD \
+            KAKAO_CLIENT_ID PINECONE_API_KEY UPSTAGE_API_KEY ALAN_CLIENT_ID
+          do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [[ -z "${SERVER_SSH_KEY:-}" && -z "${SERVER_PASSWORD:-}" ]]; then
+            missing+=("SERVER_SSH_KEY_or_SERVER_PASSWORD")
+          fi
+
+          if ((${#missing[@]})); then
+            printf 'Missing required GitHub Actions secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          if [[ -z "${SERVER_PORT:-}" ]]; then
+            echo 'SERVER_PORT is empty; SSH action will use port 22.'
+          fi
+
 
       # ======================================================
       # 2. GHCR 이미지 이름 만들기
@@ -190,6 +230,7 @@ jobs:
 
           # Caddy/HTTPS 프록시 환경에서 원래 요청 정보 인식
           SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
+          SESSION_COOKIE_SECURE: 'true'
 
 
           # --------------------------------------------------
@@ -235,13 +276,10 @@ jobs:
           # --------------------------------------------------
           # 배포 Health Check
           #
-          # 현재 외부 API 연동이 완료되지 않았으므로 web
-          #
-          # 나중에 전체 연동 완료 후:
-          # full
+          # Spring, MariaDB, FastAPI가 모두 정상일 때만 배포 성공
           # --------------------------------------------------
 
-          DEPLOY_HEALTH_MODE: ${{ vars.DEPLOY_HEALTH_MODE || 'web' }}
+          DEPLOY_HEALTH_MODE: ${{ vars.DEPLOY_HEALTH_MODE || 'full' }}
 
 
           # --------------------------------------------------
@@ -265,6 +303,8 @@ jobs:
           # --------------------------------------------------
 
           CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_API_KEY }}
+          CLOVA_OCR_URL: ${{ secrets.CLOVA_OCR_URL }}
+          CLOVA_OCR_SECRET: ${{ secrets.CLOVA_OCR_SECRET }}
 
 
           # --------------------------------------------------
@@ -275,6 +315,8 @@ jobs:
           # --------------------------------------------------
 
           LLM_API_KEY: ${{ secrets.LLMAPIKEY }}
+          UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
+          ALAN_CLIENT_ID: ${{ secrets.ALAN_CLIENT_ID }}
 
 
           # --------------------------------------------------
@@ -333,6 +375,7 @@ jobs:
               "SPRING_DATASOURCE_USERNAME",
               "SPRING_DATASOURCE_PASSWORD",
               "SERVER_FORWARD_HEADERS_STRATEGY",
+              "SESSION_COOKIE_SECURE",
 
               # FastAPI
               "AI_BASE_URL",
@@ -357,7 +400,11 @@ jobs:
 
               # OCR / LLM
               "CLOVA_OCR_API_KEY",
+              "CLOVA_OCR_URL",
+              "CLOVA_OCR_SECRET",
               "LLM_API_KEY",
+              "UPSTAGE_API_KEY",
+              "ALAN_CLIENT_ID",
 
               # Pinecone
               "PINECONE_API_KEY",

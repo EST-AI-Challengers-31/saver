@@ -849,7 +849,7 @@ Set-Location `
 
         throw 'git reset failed.'
     }
-}
+
 
     # 현재 commit을 rollback용으로 저장
     if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
@@ -891,7 +891,7 @@ Set-Location `
 
         throw 'git pull failed.'
     }
-}
+
 
 
 # ============================================================

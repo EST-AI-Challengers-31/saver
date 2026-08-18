@@ -13,30 +13,29 @@ import svgFailed from "@/imports/AnalysisFailedScreen/svg-77kkukwlrq"
 
 import imgHeaderLogo from "@/imports/image-4.png"
 import imgSymbol from "@/imports/image-5.png"
+import { useAnalysis, type DemoCheckResponse } from "@/hooks/useAnalysis"
+import { useSession } from "@/hooks/useSession"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Verdict = "danger" | "caution" | "uncertain"
 type Screen = "login" | "upload" | "loading" | "result" | "detail" | "parentGuide" | "failed" | "serviceIntro"
 type ModalType = "terms" | "privacy" | "menu" | null
 
-// ── Mock analysis ─────────────────────────────────────────────────────────────
+// ── Analysis result ───────────────────────────────────────────────────────────
 interface AnalysisResult {
   verdict: Verdict
   similarity: number
   similarCount: number
 }
 
-function getMockResult(name: string): AnalysisResult | null {
-  if (name.includes("실패") || name.includes("오류")) return null
-  switch (name.trim()) {
-    case "가짜은행 보안앱":
-      return { verdict: "danger", similarity: 94, similarCount: 3 }
-    case "스마트뱅킹 보안":
-      return { verdict: "caution", similarity: 76, similarCount: 2 }
-    case "우리집 가계부":
-      return { verdict: "uncertain", similarity: 42, similarCount: 0 }
-    default:
-      return { verdict: "uncertain", similarity: 35, similarCount: 0 }
+function toAnalysisResult(response: DemoCheckResponse): AnalysisResult {
+  const verdict: Verdict = response.level === "HIGH"
+    ? "danger"
+    : response.level === "MEDIUM" ? "caution" : "uncertain"
+  return {
+    verdict,
+    similarity: response.level === "HIGH" ? 100 : response.level === "MEDIUM" ? 70 : 0,
+    similarCount: response.level === "UNKNOWN" ? 0 : 1,
   }
 }
 
@@ -552,41 +551,12 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [modal, setModal] = useState<ModalType>(null)
   const [focusAppName, setFocusAppName] = useState(false)
+  const { user } = useSession()
+  const { analyzeApp } = useAnalysis()
 
-  // 🌟 [추가됨] 카카오 로그인 리다이렉트 후 돌아왔을 때 인가 코드 감지 및 백엔드 통신 로직
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const code = urlParams.get("code")
-
-    if (code && screen === "login") {
-      sendCodeToBackend(code)
-    }
-  }, [screen])
-
-  const sendCodeToBackend = async (code: string) => {
-    try {
-      const BACKEND_URL = "http://localhost:8080" // 백엔드 서버 주소 (팀원과 확인)
-      const response = await fetch(`${BACKEND_URL}/api/auth/kakao`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        localStorage.setItem("accessToken", data.accessToken)
-        window.history.replaceState({}, document.title, window.location.pathname)
-        setScreen("upload")
-      } else {
-        alert("로그인 실패: " + (data.message || "알 수 없는 오류"))
-        setScreen("login")
-      }
-    } catch (error) {
-      console.error("백엔드 통신 에러:", error)
-      setScreen("login")
-    }
-  }
+    if (user) setScreen("upload")
+  }, [user])
 
   const openMenu = useCallback(() => setModal("menu"), [])
   const openTerms = useCallback(() => setModal("terms"), [])
@@ -603,15 +573,16 @@ export default function App() {
     setScreen("loading")
   }, [])
 
-  const handleLoadingDone = useCallback(() => {
-    const r = getMockResult(appName)
-    if (!r) {
-      setScreen("failed")
-    } else {
-      setResult(r)
+  const handleLoadingDone = useCallback(async () => {
+    try {
+      const data = await analyzeApp(appName)
+      setResult(toAnalysisResult(data))
       setScreen("result")
+    } catch (error) {
+      console.error("분석 API 통신 오류:", error)
+      setScreen("failed")
     }
-  }, [appName])
+  }, [analyzeApp, appName])
 
   const resetAndGoToUpload = useCallback(() => {
     setAppName("")
@@ -630,7 +601,6 @@ export default function App() {
       <div className="relative bg-[#f8fafb] w-full flex flex-col" style={{ maxWidth: 430, height: "100dvh" }}>
         {screen === "login" && (
           <LoginScreen
-            onNext={() => setScreen("upload")}
             onShowTerms={openTerms}
             onShowPrivacy={openPrivacy}
           />

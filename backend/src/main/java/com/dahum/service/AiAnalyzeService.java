@@ -15,7 +15,7 @@ public class AiAnalyzeService {
     private final String aiBaseUrl;
 
     public AiAnalyzeService(RestTemplate restTemplate,
-                             @Value("${ai.base-url}") String aiBaseUrl) {
+                             @Value("${dahum.ai.base-url}") String aiBaseUrl) {
         this.restTemplate = restTemplate;
         this.aiBaseUrl = aiBaseUrl;
     }

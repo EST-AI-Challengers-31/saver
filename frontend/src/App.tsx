@@ -1,43 +1,55 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback } from "react";
 
-import { LoginScreen } from "@/pages/LoginScreen"
-import { UploadScreen } from "@/pages/UploadScreen"
-import { LoadingScreen } from "@/pages/LoadingScreen"
-import { DetailScreen } from "@/pages/DetailScreen"
-import { ParentGuideScreen } from "@/pages/ParentGuideScreen"
+import { LoginScreen } from "@/pages/LoginScreen";
+import { UploadScreen } from "@/pages/UploadScreen";
+import { LoadingScreen } from "@/pages/LoadingScreen";
+import { DetailScreen } from "@/pages/DetailScreen";
+import { ParentGuideScreen } from "@/pages/ParentGuideScreen";
 
-import svgUpload from "@/imports/UploadInitialScreen/svg-wqv28lyrjs"
-import svgDanger from "@/imports/ResultDangerScreen/svg-eijb8y654a"
-import svgDetail from "@/imports/DetailScreen/svg-8kiebeh0qh"
-import svgFailed from "@/imports/AnalysisFailedScreen/svg-77kkukwlrq"
+import { analyzeImage, AnalyzeResponse } from "@/api/analyze";
 
-import imgHeaderLogo from "@/imports/image-4.png"
-import imgSymbol from "@/imports/image-5.png"
+import svgUpload from "@/imports/UploadInitialScreen/svg-wqv28lyrjs";
+import svgDanger from "@/imports/ResultDangerScreen/svg-eijb8y654a";
+import svgDetail from "@/imports/DetailScreen/svg-8kiebeh0qh";
+import svgFailed from "@/imports/AnalysisFailedScreen/svg-77kkukwlrq";
+
+import imgHeaderLogo from "@/imports/image-4.png";
+import imgSymbol from "@/imports/image-5.png";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Verdict = "danger" | "caution" | "uncertain"
-type Screen = "login" | "upload" | "loading" | "result" | "detail" | "parentGuide" | "failed" | "serviceIntro"
-type ModalType = "terms" | "privacy" | "menu" | null
+type Verdict = "danger" | "caution" | "uncertain";
+type Screen =
+  | "login"
+  | "upload"
+  | "loading"
+  | "result"
+  | "detail"
+  | "parentGuide"
+  | "failed"
+  | "serviceIntro";
+type ModalType = "terms" | "privacy" | "menu" | null;
 
-// ── Mock analysis ─────────────────────────────────────────────────────────────
+// ── Analysis result ─────────────────────────────────────────────────────────────
 interface AnalysisResult {
-  verdict: Verdict
-  similarity: number
-  similarCount: number
+  verdict: Verdict;
+  similarity: number;
+  similarCount: number;
 }
 
-function getMockResult(name: string): AnalysisResult | null {
-  if (name.includes("실패") || name.includes("오류")) return null
-  switch (name.trim()) {
-    case "가짜은행 보안앱":
-      return { verdict: "danger", similarity: 94, similarCount: 3 }
-    case "스마트뱅킹 보안":
-      return { verdict: "caution", similarity: 76, similarCount: 2 }
-    case "우리집 가계부":
-      return { verdict: "uncertain", similarity: 42, similarCount: 0 }
-    default:
-      return { verdict: "uncertain", similarity: 35, similarCount: 0 }
-  }
+// AI 서버 응답(AnalyzeResponse)을 화면에서 쓰는 AnalysisResult 형태로 변환
+// TODO: 실제 AI 서버 응답에 risk_level/similarity 등의 필드가 추가되면 그에 맞춰 매핑 로직 수정
+function mapApiResultToAnalysisResult(
+  api: AnalyzeResponse,
+): AnalysisResult | null {
+  if (!api.results || api.results.length === 0) return null;
+
+  // 임시: 첫 번째 결과만 사용, verdict는 uncertain으로 고정
+  // 백엔드/AI 응답에 위험도(risk_level 등) 필드가 추가되면 아래 매핑을 교체
+  return {
+    verdict: "uncertain",
+    similarity: 0,
+    similarCount: api.results.length,
+  };
 }
 
 // ── Verdict config ────────────────────────────────────────────────────────────
@@ -128,7 +140,7 @@ const VC = {
     guideSub: "그래도 모르는 앱이면 삭제하셔도 좋아요.",
     guideDelete: (n: string) => `설정 → 앱 → ${n}에서 앱 정보를 확인해보세요.`,
   },
-}
+};
 
 // ── Legal content ─────────────────────────────────────────────────────────────
 const TERMS_CONTENT = `제1조 (목적)
@@ -149,7 +161,7 @@ const TERMS_CONTENT = `제1조 (목적)
 제6조 (약관의 변경)
 본 약관은 필요에 따라 변경될 수 있으며, 변경된 약관은 서비스 내 공지를 통해 안내됩니다.
 
-⚠️ 본 약관은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`
+⚠️ 본 약관은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`;
 
 const PRIVACY_CONTENT = `1. 수집하는 개인정보
 본 서비스는 다음의 개인정보를 수집합니다.
@@ -176,18 +188,18 @@ const PRIVACY_CONTENT = `1. 수집하는 개인정보
 성명: 닿음 운영팀
 이메일: privacy@dateum.app
 
-⚠️ 본 방침은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`
+⚠️ 본 방침은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`;
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 function LegalModal({
   type,
   onClose,
 }: {
-  type: "terms" | "privacy"
-  onClose: () => void
+  type: "terms" | "privacy";
+  onClose: () => void;
 }) {
-  const title = type === "terms" ? "이용약관" : "개인정보처리방침"
-  const content = type === "terms" ? TERMS_CONTENT : PRIVACY_CONTENT
+  const title = type === "terms" ? "이용약관" : "개인정보처리방침";
+  const content = type === "terms" ? TERMS_CONTENT : PRIVACY_CONTENT;
 
   return (
     <div className="absolute inset-0 z-50 bg-[#f8fafb] flex flex-col">
@@ -219,7 +231,7 @@ function LegalModal({
         <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
       </div>
     </div>
-  )
+  );
 }
 
 function MenuSheet({
@@ -228,10 +240,10 @@ function MenuSheet({
   onShowPrivacy,
   onShowServiceIntro,
 }: {
-  onClose: () => void
-  onShowTerms: () => void
-  onShowPrivacy: () => void
-  onShowServiceIntro: () => void
+  onClose: () => void;
+  onShowTerms: () => void;
+  onShowPrivacy: () => void;
+  onShowServiceIntro: () => void;
 }) {
   const Chevron = () => (
     <svg fill="none" height="18" viewBox="0 0 18 18" width="18">
@@ -242,7 +254,7 @@ function MenuSheet({
         strokeWidth="1.5"
       />
     </svg>
-  )
+  );
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end">
@@ -375,7 +387,7 @@ function MenuSheet({
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function StatusBar() {
@@ -386,23 +398,45 @@ function StatusBar() {
       </p>
       <div className="flex gap-[6px] items-center">
         <div className="relative shrink-0 size-[18px]">
-          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
-            <path clipRule="evenodd" d={svgUpload.pc062070} fill="#0F172A" fillRule="evenodd" />
+          <svg
+            className="absolute block inset-0 size-full"
+            fill="none"
+            viewBox="0 0 18 18"
+          >
+            <path
+              clipRule="evenodd"
+              d={svgUpload.pc062070}
+              fill="#0F172A"
+              fillRule="evenodd"
+            />
           </svg>
         </div>
         <div className="relative shrink-0 size-[18px]">
-          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
-            <path clipRule="evenodd" d={svgUpload.p23837e00} fill="#0F172A" fillRule="evenodd" />
+          <svg
+            className="absolute block inset-0 size-full"
+            fill="none"
+            viewBox="0 0 18 18"
+          >
+            <path
+              clipRule="evenodd"
+              d={svgUpload.p23837e00}
+              fill="#0F172A"
+              fillRule="evenodd"
+            />
           </svg>
         </div>
         <div className="h-[18px] relative shrink-0 w-[26px]">
-          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 26 18">
+          <svg
+            className="absolute block inset-0 size-full"
+            fill="none"
+            viewBox="0 0 26 18"
+          >
             <path d={svgUpload.p1f206500} fill="#0F172A" />
           </svg>
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function HomeIndicator() {
@@ -410,33 +444,51 @@ function HomeIndicator() {
     <div className="flex items-start justify-center py-[12px] w-full">
       <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
     </div>
-  )
+  );
 }
 
 function BrandHeader({
   onMenuOpen,
   onLogoClick,
 }: {
-  onMenuOpen: () => void
-  onLogoClick?: () => void
+  onMenuOpen: () => void;
+  onLogoClick?: () => void;
 }) {
   return (
     <div className="bg-white content-stretch flex h-[56px] items-center justify-between px-[24px] relative shrink-0 w-full">
       <button onClick={onLogoClick} className="flex gap-[12px] items-center">
         <div className="h-[36px] relative shrink-0 w-[36px]">
-          <img alt="닿음 로고" className="w-full h-full object-contain" src={imgHeaderLogo} />
+          <img
+            alt="닿음 로고"
+            className="w-full h-full object-contain"
+            src={imgHeaderLogo}
+          />
         </div>
         <p className="font-['Pretendard'] font-bold leading-[normal] shrink-0 text-[#1b3a5c] text-[18px] whitespace-nowrap">
           닿음
         </p>
       </button>
-      <button onClick={onMenuOpen} className="flex flex-col items-center justify-center shrink-0 size-[24px]">
-        <svg className="block size-full" fill="none" height="24" viewBox="0 0 24 24" width="24">
-          <path d={svgUpload.p15b88b00} stroke="#1B3A5C" strokeLinecap="round" strokeWidth="2" />
+      <button
+        onClick={onMenuOpen}
+        className="flex flex-col items-center justify-center shrink-0 size-[24px]"
+      >
+        <svg
+          className="block size-full"
+          fill="none"
+          height="24"
+          viewBox="0 0 24 24"
+          width="24"
+        >
+          <path
+            d={svgUpload.p15b88b00}
+            stroke="#1B3A5C"
+            strokeLinecap="round"
+            strokeWidth="2"
+          />
         </svg>
       </button>
     </div>
-  )
+  );
 }
 
 function ResultScreen({
@@ -448,18 +500,18 @@ function ResultScreen({
   onMenuOpen,
   onLogoClick,
 }: {
-  appName: string
-  result: AnalysisResult
-  onDetail: () => void
-  onGuide: () => void
-  onAnalyzeAnother: () => void
-  onMenuOpen: () => void
-  onLogoClick: () => void
+  appName: string;
+  result: AnalysisResult;
+  onDetail: () => void;
+  onGuide: () => void;
+  onAnalyzeAnother: () => void;
+  onMenuOpen: () => void;
+  onLogoClick: () => void;
 }) {
-  const v = VC[result.verdict]
-  const isDanger = result.verdict === "danger"
-  const isCaution = result.verdict === "caution"
-  const isUncertain = result.verdict === "uncertain"
+  const v = VC[result.verdict];
+  const isDanger = result.verdict === "danger";
+  const isCaution = result.verdict === "caution";
+  const isUncertain = result.verdict === "uncertain";
 
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
@@ -470,24 +522,51 @@ function ResultScreen({
           <div className="flex justify-center w-full">
             <div
               className="flex gap-[8px] items-center px-[16px] py-[10px] rounded-[100px]"
-              style={{ backgroundColor: v.badgeBg, border: `1px solid ${v.badgeBorder}` }}
+              style={{
+                backgroundColor: v.badgeBg,
+                border: `1px solid ${v.badgeBorder}`,
+              }}
             >
-              <p className="font-['Pretendard'] font-bold text-[14px] whitespace-nowrap" style={{ color: v.badgeText }}>
+              <p
+                className="font-['Pretendard'] font-bold text-[14px] whitespace-nowrap"
+                style={{ color: v.badgeText }}
+              >
                 {v.badgeLabel}
               </p>
             </div>
           </div>
           <div className="bg-white flex flex-col gap-[16px] p-[24px] relative rounded-[20px] w-full">
-            <div aria-hidden className="absolute inset-0 pointer-events-none rounded-[20px]" style={{ border: `1px solid ${v.cardBorder}` }} />
-            <p className="font-['Pretendard'] font-bold leading-[1.4] text-[#1b3a5c] text-[20px] w-full">{v.title}</p>
-            <p className="font-['Pretendard'] font-medium leading-[1.5] text-[#64748b] text-[14px] w-full">{v.body}</p>
+            <div
+              aria-hidden
+              className="absolute inset-0 pointer-events-none rounded-[20px]"
+              style={{ border: `1px solid ${v.cardBorder}` }}
+            />
+            <p className="font-['Pretendard'] font-bold leading-[1.4] text-[#1b3a5c] text-[20px] w-full">
+              {v.title}
+            </p>
+            <p className="font-['Pretendard'] font-medium leading-[1.5] text-[#64748b] text-[14px] w-full">
+              {v.body}
+            </p>
             <div className="flex flex-col gap-[6px] pt-[12px] w-full">
               <div className="flex items-center justify-between w-full">
-                <p className="font-['Inter'] font-normal text-[#64748b] text-[12px]">악성 앱 유사도</p>
-                <p className="font-['Pretendard'] font-bold text-[12px]" style={{ color: v.pctColor }}>{result.similarity}%</p>
+                <p className="font-['Inter'] font-normal text-[#64748b] text-[12px]">
+                  악성 앱 유사도
+                </p>
+                <p
+                  className="font-['Pretendard'] font-bold text-[12px]"
+                  style={{ color: v.pctColor }}
+                >
+                  {result.similarity}%
+                </p>
               </div>
               <div className="bg-[#e2e8f0] h-[8px] overflow-clip rounded-[4px] w-full">
-                <div className="h-full rounded-[4px]" style={{ width: `${result.similarity}%`, backgroundColor: v.barColor }} />
+                <div
+                  className="h-full rounded-[4px]"
+                  style={{
+                    width: `${result.similarity}%`,
+                    backgroundColor: v.barColor,
+                  }}
+                />
               </div>
             </div>
           </div>
@@ -495,40 +574,70 @@ function ResultScreen({
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
         <div className="flex flex-col gap-[8px] w-full">
-          <button onClick={onGuide} className="flex gap-[8px] h-[54px] items-center justify-center rounded-[14px] w-full" style={{ background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)" }}>
-            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">부모님께 안내문 보내기</p>
+          <button
+            onClick={onGuide}
+            className="flex gap-[8px] h-[54px] items-center justify-center rounded-[14px] w-full"
+            style={{
+              background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)",
+            }}
+          >
+            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">
+              부모님께 안내문 보내기
+            </p>
           </button>
           {!isUncertain && (
-            <button onClick={onDetail} className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full">
-              <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">상세 정보 보기</p>
+            <button
+              onClick={onDetail}
+              className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full"
+            >
+              <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">
+                상세 정보 보기
+              </p>
             </button>
           )}
-          <button onClick={onAnalyzeAnother} className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full">
-            <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">다른 앱 분석하기</p>
+          <button
+            onClick={onAnalyzeAnother}
+            className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full"
+          >
+            <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">
+              다른 앱 분석하기
+            </p>
           </button>
         </div>
         <HomeIndicator />
       </div>
     </div>
-  )
+  );
 }
 
-function FailedScreen({ onSelectImage, onTypeAppName, onMenuOpen, onLogoClick }: any) {
+function FailedScreen({
+  onSelectImage,
+  onTypeAppName,
+  onMenuOpen,
+  onLogoClick,
+}: any) {
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
       <div className="flex flex-col w-full">
         <StatusBar />
         <BrandHeader onMenuOpen={onMenuOpen} onLogoClick={onLogoClick} />
         <div className="flex flex-col gap-[24px] items-center p-[24px] w-full">
-          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px]">분석에 실패했어요</p>
+          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px]">
+            분석에 실패했어요
+          </p>
         </div>
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
-        <button onClick={onSelectImage} className="flex h-[54px] items-center justify-center rounded-[14px] w-full bg-blue-500 text-white">다른 이미지 선택</button>
+        <button
+          onClick={onSelectImage}
+          className="flex h-[54px] items-center justify-center rounded-[14px] w-full bg-blue-500 text-white"
+        >
+          다른 이미지 선택
+        </button>
         <HomeIndicator />
       </div>
     </div>
-  )
+  );
 }
 
 function ServiceIntroScreen({ onBack }: { onBack: () => void }) {
@@ -541,58 +650,91 @@ function ServiceIntroScreen({ onBack }: { onBack: () => void }) {
       </div>
       <HomeIndicator />
     </div>
-  )
+  );
 }
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("login")
-  const [appName, setAppName] = useState("")
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [result, setResult] = useState<AnalysisResult | null>(null)
-  const [modal, setModal] = useState<ModalType>(null)
-  const [focusAppName, setFocusAppName] = useState(false)
+  const [screen, setScreen] = useState<Screen>("login");
+  const [appName, setAppName] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
+  const [modal, setModal] = useState<ModalType>(null);
+  const [focusAppName, setFocusAppName] = useState(false);
 
-  const openMenu = useCallback(() => setModal("menu"), [])
-  const openTerms = useCallback(() => setModal("terms"), [])
-  const openPrivacy = useCallback(() => setModal("privacy"), [])
-  const closeModal = useCallback(() => setModal(null), [])
+  const openMenu = useCallback(() => setModal("menu"), []);
+  const openTerms = useCallback(() => setModal("terms"), []);
+  const openPrivacy = useCallback(() => setModal("privacy"), []);
+  const closeModal = useCallback(() => setModal(null), []);
   const openServiceIntro = useCallback(() => {
-    setModal(null)
-    setScreen("serviceIntro")
-  }, [])
+    setModal(null);
+    setScreen("serviceIntro");
+  }, []);
 
-  const handleAnalyze = useCallback((name: string, img: string | null) => {
-    setAppName(name)
-    setImageUrl(img)
-    setScreen("loading")
-  }, [])
+  // 이미지가 있으면 실제 AI 서버(/api/analyze)를 호출하고,
+  // 이미지 없이 이름만 입력한 경우엔 결과 없이 loading -> failed로 처리
+  const handleAnalyze = useCallback(
+    async (name: string, img: string | null, imageFile: File | null) => {
+      setAppName(name);
+      setImageUrl(img);
+      setApiResult(null);
+      setScreen("loading");
+
+      if (!imageFile) {
+        // 이미지가 없는 경우: 현재는 분석 불가로 처리
+        setScreen("failed");
+        return;
+      }
+
+      try {
+        const data = await analyzeImage(imageFile);
+        setApiResult(data);
+      } catch (err) {
+        console.error("분석 요청 실패:", err);
+        setScreen("failed");
+      }
+    },
+    [],
+  );
 
   const handleLoadingDone = useCallback(() => {
-    const r = getMockResult(appName)
-    if (!r) {
-      setScreen("failed")
-    } else {
-      setResult(r)
-      setScreen("result")
+    if (!apiResult) {
+      setScreen("failed");
+      return;
     }
-  }, [appName])
+
+    const mapped = mapApiResultToAnalysisResult(apiResult);
+    if (!mapped) {
+      setScreen("failed");
+    } else {
+      setResult(mapped);
+      setScreen("result");
+    }
+  }, [apiResult]);
 
   const resetAndGoToUpload = useCallback(() => {
-    setAppName("")
-    setImageUrl(null)
-    setResult(null)
-    setFocusAppName(false)
-    setScreen("upload")
-  }, [])
+    setAppName("");
+    setImageUrl(null);
+    setResult(null);
+    setApiResult(null);
+    setFocusAppName(false);
+    setScreen("upload");
+  }, []);
 
   useEffect(() => {
-    if (screen !== "upload") setFocusAppName(false)
-  }, [screen])
+    if (screen !== "upload") setFocusAppName(false);
+  }, [screen]);
 
   return (
-    <div className="flex items-start justify-center bg-[#e8edf5]" style={{ minHeight: "100dvh" }}>
-      <div className="relative bg-[#f8fafb] w-full flex flex-col" style={{ maxWidth: 430, height: "100dvh" }}>
+    <div
+      className="flex items-start justify-center bg-[#e8edf5]"
+      style={{ minHeight: "100dvh" }}
+    >
+      <div
+        className="relative bg-[#f8fafb] w-full flex flex-col"
+        style={{ maxWidth: 430, height: "100dvh" }}
+      >
         {screen === "login" && (
           <LoginScreen
             onNext={() => setScreen("upload")}
@@ -629,10 +771,21 @@ export default function App() {
           />
         )}
         {screen === "detail" && result && (
-          <DetailScreen appName={appName} result={result} onBack={() => setScreen("result")} onMenuOpen={openMenu} />
+          <DetailScreen
+            appName={appName}
+            result={result}
+            onBack={() => setScreen("result")}
+            onMenuOpen={openMenu}
+          />
         )}
         {screen === "parentGuide" && result && (
-          <ParentGuideScreen appName={appName} result={result} onBack={() => setScreen("result")} onMenuOpen={openMenu} onAnalyzeAnother={resetAndGoToUpload} />
+          <ParentGuideScreen
+            appName={appName}
+            result={result}
+            onBack={() => setScreen("result")}
+            onMenuOpen={openMenu}
+            onAnalyzeAnother={resetAndGoToUpload}
+          />
         )}
         {screen === "failed" && (
           <FailedScreen
@@ -660,5 +813,5 @@ export default function App() {
         )}
       </div>
     </div>
-  )
+  );
 }

@@ -308,13 +308,26 @@ function Invoke-Compose {
         [string]$ComposeFile
     )
 
-    & docker compose `
-        -f $ComposeFile `
-        @Arguments
+    $previousErrorActionPreference = $ErrorActionPreference
+    $composeExitCode = 0
 
+    try {
+        # Windows PowerShell 5.1 converts native stderr into ErrorRecord objects.
+        # Docker Compose writes warnings to stderr even when exit code is 0, so
+        # temporarily keep native stderr non-terminating and trust LASTEXITCODE.
+        $ErrorActionPreference = 'Continue'
 
-    if ($LASTEXITCODE -ne 0) {
+        & docker compose `
+            -f $ComposeFile `
+            @Arguments
 
+        $composeExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($composeExitCode -ne 0) {
         throw (
             'docker compose failed: ' +
             ($Arguments -join ' ')
@@ -347,16 +360,15 @@ function Wait-ComposeServicesRunning {
     while ((Get-Date) -lt $deadline) {
 
         $running = @(
-            & docker compose `
-                -f $ComposeFile `
-                ps `
-                --status running `
-                --services
+            Invoke-Compose `
+                -Arguments @(
+                    'ps',
+                    '--status',
+                    'running',
+                    '--services'
+                ) `
+                -ComposeFile $ComposeFile
         )
-
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not inspect Docker Compose service state.'
-        }
 
         $lastMissing = @(
             $Services | Where-Object {
@@ -635,7 +647,10 @@ Assert-RequiredEnv `
         'SPRING_DATASOURCE_URL',
         'SPRING_DATASOURCE_USERNAME',
         'SPRING_DATASOURCE_PASSWORD',
-        'AI_BASE_URL'
+        'AI_BASE_URL',
+        'ALAN_CLIENT_ID',
+        'UPSTAGE_API_KEY',
+        'PINECONE_API_KEY'
     )
 
 
@@ -838,19 +853,16 @@ try {
     # Existing services
     # ========================================================
 
-    $running = & docker compose `
-        -f $ComposePath `
-        ps `
-        --status running `
-        --services
-
-
-    if ($LASTEXITCODE -ne 0) {
-
-        throw (
-            'Could not inspect current Docker services.'
-        )
-    }
+    $running = @(
+        Invoke-Compose `
+            -Arguments @(
+                'ps',
+                '--status',
+                'running',
+                '--services'
+            ) `
+            -ComposeFile $ComposePath
+    )
 
 
     # ========================================================
@@ -1024,17 +1036,11 @@ try {
     )
 
 
-    & docker compose `
-        -f $ComposePath `
-        ps
-
-
-    if ($LASTEXITCODE -ne 0) {
-
-        throw (
-            'Could not display final Docker Compose status.'
-        )
-    }
+    Invoke-Compose `
+        -Arguments @(
+            'ps'
+        ) `
+        -ComposeFile $ComposePath
 
 
     Write-Host (
@@ -1069,9 +1075,11 @@ catch {
         )
 
 
-        & docker compose `
-            -f $ComposePath `
-            ps |
+        Invoke-Compose `
+            -Arguments @(
+                'ps'
+            ) `
+            -ComposeFile $ComposePath |
             Out-Host
     }
     catch {
@@ -1088,14 +1096,17 @@ catch {
         Write-Host 'Recent Docker logs:'
 
 
-        & docker compose `
-            -f $ComposePath `
-            logs `
-            --tail 120 `
-            backend `
-            ai `
-            mariadb `
-            caddy |
+        Invoke-Compose `
+            -Arguments @(
+                'logs',
+                '--tail',
+                '120',
+                'backend',
+                'ai',
+                'mariadb',
+                'caddy'
+            ) `
+            -ComposeFile $ComposePath |
             Out-Host
     }
     catch {

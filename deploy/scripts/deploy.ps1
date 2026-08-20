@@ -447,22 +447,15 @@ function Try-RollbackDeployment {
     $previousAi = "$aiBase`:$PreviousCommit"
 
     Write-Warning (
-        'Attempting automatic rollback to commit ' +
+        'Attempting automatic application image rollback to commit ' +
         $PreviousCommit
     )
 
     try {
-        Set-Location -LiteralPath $ProjectRoot
-
-        git reset `
-            --hard `
-            $PreviousCommit
-
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Git rollback failed.'
-        }
-
-        # 이전 commit의 Compose 정의와 이전 application image를 함께 사용한다.
+        # 현재 배포 인프라(Compose 정의)는 유지한다.
+        # 이전 Git commit으로 작업 트리를 되돌리면 과거의 잘못된
+        # healthcheck/depends_on 설정까지 복원될 수 있으므로,
+        # 애플리케이션 이미지 태그만 이전 commit으로 되돌린다.
         $env:BACKEND_IMAGE = $previousBackend
         $env:AI_IMAGE = $previousAi
 
@@ -502,7 +495,7 @@ function Try-RollbackDeployment {
             -TimeoutSeconds 90
 
         Write-Warning (
-            'Previous deployment was restored successfully.'
+            'Previous application images were restored successfully.'
         )
     }
     catch {

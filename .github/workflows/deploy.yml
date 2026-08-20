@@ -267,6 +267,10 @@ jobs:
 
           LLM_API_KEY: ${{ secrets.LLMAPIKEY }}
 
+          # AI runtime credentials used directly by app modules
+          ALAN_CLIENT_ID: ${{ secrets.ALAN_CLIENT_ID }}
+          UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
+
 
           # --------------------------------------------------
           # Pinecone
@@ -276,7 +280,7 @@ jobs:
 
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
 
-          PINECONE_INDEX: ${{ vars.PINECONE_INDEX }}
+          PINECONE_INDEX: ${{ vars.PINECONE_INDEX || 'dahum-malware' }}
 
 
           # --------------------------------------------------
@@ -347,6 +351,8 @@ jobs:
               # OCR / LLM
               "CLOVA_OCR_API_KEY",
               "LLM_API_KEY",
+              "ALAN_CLIENT_ID",
+              "UPSTAGE_API_KEY",
 
               # Pinecone
               "PINECONE_API_KEY",

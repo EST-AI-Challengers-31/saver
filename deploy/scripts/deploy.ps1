@@ -1,431 +1,1138 @@
-name: Build images and deploy Dahum
+param(
+    [switch]$SkipGitUpdate,
 
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "frontend/**"
-      - "backend/**"
-      - "ai/**"
-      - "db/**"
-      - "deploy/**"
-      - ".github/workflows/deploy.yml"
+    # GitHub Actions가 빌드한 백엔드 이미지
+    [string]$BackendImage = '',
 
-  workflow_dispatch:
+    # GitHub Actions가 빌드한 AI 이미지
+    [string]$AiImage = '',
 
-concurrency:
-  group: dahum-production
-  cancel-in-progress: false
+    # GHCR 사용자명
+    [string]$RegistryUser = '',
 
-permissions:
-  contents: read
-  packages: write
+    # GHCR 인증 토큰
+    [string]$RegistryToken = '',
 
+    # 문제가 생겼을 때 되돌아갈 이전 Git commit
+    [string]$RollbackCommit = '',
 
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # GitHub Actions가 전달하는
+    # 런타임 환경설정 JSON의 Base64 문자열
+    [string]$RuntimeConfigBase64 = ''
+)
 
-    steps:
+$ErrorActionPreference = 'Stop'
 
-      # ======================================================
-      # 1. 저장소 코드 받기
-      # ======================================================
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-
-      # ======================================================
-      # 2. GHCR 이미지 이름 만들기
-      #
-      # 예:
-      # ghcr.io/est-ai-challengers-31/saver-backend
-      # ghcr.io/est-ai-challengers-31/saver-ai
-      # ======================================================
-
-      - name: Resolve GHCR image names
-        id: images
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          repo_lower="$(
-            printf '%s' "$GITHUB_REPOSITORY" |
-            tr '[:upper:]' '[:lower:]'
-          )"
-
-          echo "backend=ghcr.io/${repo_lower}-backend" >> "$GITHUB_OUTPUT"
-          echo "ai=ghcr.io/${repo_lower}-ai" >> "$GITHUB_OUTPUT"
-
-
-      # ======================================================
-      # 3. Docker Buildx 준비
-      # ======================================================
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-
-      # ======================================================
-      # 4. GitHub Container Registry 로그인
-      # ======================================================
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-
-      # ======================================================
-      # 5. Spring Boot + React 이미지 빌드 및 업로드
-      # ======================================================
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: backend/Dockerfile
-          push: true
+# ============================================================
+# Runtime configuration
+#
+# 서버의 .env 파일은 사용하지 않는다.
+#
+# GitHub Actions
+#   -> JSON 생성
+#   -> Base64 인코딩
+#   -> RuntimeConfigBase64 전달
+#   -> 이 스크립트에서 환경변수로 등록
+# ============================================================
 
-          tags: |
-            ${{ steps.images.outputs.backend }}:${{ github.sha }}
-            ${{ steps.images.outputs.backend }}:latest
+function Import-RuntimeConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EncodedConfig
+    )
 
-          cache-from: type=gha,scope=dahum-backend
-          cache-to: type=gha,mode=max,scope=dahum-backend
+    if ([string]::IsNullOrWhiteSpace($EncodedConfig)) {
+        throw 'Runtime configuration was not supplied by GitHub Actions.'
+    }
 
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+    try {
+        $bytes = [System.Convert]::FromBase64String(
+            $EncodedConfig
+        )
 
+        $json = [System.Text.Encoding]::UTF8.GetString(
+            $bytes
+        )
 
-      # ======================================================
-      # 6. FastAPI 이미지 빌드 및 업로드
-      # ======================================================
+        $config = $json | ConvertFrom-Json
+    }
+    catch {
+        throw (
+            'Could not decode runtime configuration from GitHub Actions: ' +
+            $_.Exception.Message
+        )
+    }
 
-      - name: Build and push FastAPI image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./ai
-          file: ./ai/Dockerfile
-          push: true
 
-          tags: |
-            ${{ steps.images.outputs.ai }}:${{ github.sha }}
-            ${{ steps.images.outputs.ai }}:latest
+    foreach ($property in $config.PSObject.Properties) {
 
-          cache-from: type=gha,scope=dahum-ai
-          cache-to: type=gha,mode=max,scope=dahum-ai
+        $name = [string]$property.Name
+        $value = [string]$property.Value
 
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
 
+            [Environment]::SetEnvironmentVariable(
+                $name,
+                $value,
+                'Process'
+            )
+        }
+    }
 
-      # ======================================================
-      # 7. 서버 실행 환경설정 만들기
-      #
-      # 서버에 .env 파일을 만들지 않는다.
-      #
-      # GitHub Secrets / Variables
-      #        ↓
-      # JSON
-      #        ↓
-      # Base64
-      #        ↓
-      # deploy.ps1
-      #
-      # 실제 비밀번호/API Key가 SSH 명령문에 직접 노출되지
-      # 않도록 전체 설정을 Base64로 묶어서 전달한다.
-      # ======================================================
 
-      - name: Build runtime configuration
-        id: runtime_config
-        shell: bash
+    Write-Host 'Runtime configuration loaded from GitHub Actions.'
+}
 
-        env:
 
-          # --------------------------------------------------
-          # MariaDB
-          # --------------------------------------------------
+function Get-EnvValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
 
-          # 사용할 DB 이름
-          MARIADB_DATABASE: ${{ vars.MARIADB_DATABASE || 'dahum' }}
+        [string]$DefaultValue = ''
+    )
 
-          # 닿음 전용 DB 사용자
-          MARIADB_USER: ${{ vars.MARIADB_USER || 'dahum_app' }}
+    $value = [Environment]::GetEnvironmentVariable(
+        $Name,
+        'Process'
+    )
 
-          # DB 사용자 비밀번호
-          #
-          # 실제 GitHub Secret 이름:
-          # SPRINGDATASOURCEPASSWORD
-          #
-          # MariaDB와 Spring Boot가 같은 값을 사용한다.
-          MARIADB_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+        return $value
+    }
 
-          # MariaDB 관리자(root) 비밀번호
-          MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADBROOTPASSWORD }}
+    return $DefaultValue
+}
 
 
-          # --------------------------------------------------
-          # Spring Boot
-          # --------------------------------------------------
+function Assert-RequiredEnv {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Names
+    )
 
-          # 운영 프로필
-          SPRING_PROFILES_ACTIVE: ${{ vars.SPRING_PROFILES_ACTIVE || 'prod' }}
+    $missing = @()
 
-          # Docker 내부 MariaDB 주소
-          SPRING_DATASOURCE_URL: ${{ vars.SPRING_DATASOURCE_URL || 'jdbc:mariadb://mariadb:3306/dahum' }}
 
-          # Spring Boot DB 사용자
-          SPRING_DATASOURCE_USERNAME: ${{ vars.SPRING_DATASOURCE_USERNAME || 'dahum_app' }}
+    foreach ($name in $Names) {
 
-          # MariaDB 사용자 비밀번호와 동일한 값 사용
-          SPRING_DATASOURCE_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
+        $value = [Environment]::GetEnvironmentVariable(
+            $name,
+            'Process'
+        )
 
-          # Caddy/HTTPS 프록시 환경에서 원래 요청 정보 인식
-          SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            $missing += $name
+        }
+    }
 
 
-          # --------------------------------------------------
-          # FastAPI 내부 주소
-          # --------------------------------------------------
+    if ($missing.Count -gt 0) {
 
-          # Spring Boot → FastAPI Docker 내부 주소
-          AI_BASE_URL: ${{ vars.AI_BASE_URL || 'http://ai:8000' }}
+        throw (
+            'Required environment variables are missing: ' +
+            ($missing -join ', ')
+        )
+    }
+}
 
 
-          # --------------------------------------------------
-          # 닿음 서버 / 실행 환경
-          # --------------------------------------------------
+# ============================================================
+# Docker / GHCR authentication
+#
+# Windows SSH 비대화형 세션에서는
+# Docker Desktop Credential Manager 때문에
+# docker login이 실패할 수 있다.
+#
+# 따라서 임시 DOCKER_CONFIG를 직접 생성한다.
+# ============================================================
 
-          # 서버 런타임 데이터 저장 위치
-          DAHUM_RUNTIME: ${{ vars.DAHUM_RUNTIME || 'C:/home/dahum/runtime' }}
+function Initialize-DockerSshConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectRoot,
 
-          # 닿음이 미니 PC에서 사용하는 포트
-          DAHUM_HOST_PORT: ${{ vars.DAHUM_HOST_PORT || '9000' }}
+        [Parameter(Mandatory = $true)]
+        [string]$RegistryUser,
 
-          # 외부 도메인
-          PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN || 'yellow.it.kr' }}
+        [Parameter(Mandatory = $true)]
+        [string]$RegistryToken
+    )
 
-          # 외부 전체 URL
-          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL || 'https://yellow.it.kr' }}
+    if ([string]::IsNullOrWhiteSpace($RegistryUser)) {
+        throw 'GHCR registry user was not supplied by GitHub Actions.'
+    }
 
 
-          # --------------------------------------------------
-          # 기존 MOVEAI / Caddy
-          # --------------------------------------------------
+    if ([string]::IsNullOrWhiteSpace($RegistryToken)) {
+        throw 'GHCR registry token was not supplied by GitHub Actions.'
+    }
 
-          # 기존 MOVEAI 위치
-          MOVEAI_ROOT: ${{ vars.MOVEAI_ROOT || 'C:/MOVEAI' }}
 
-          # 기존 MOVEAI Caddy 자동 수정 여부
-          # 현재 false 유지
-          OUTER_CADDY_AUTO_CONFIGURE: ${{ vars.OUTER_CADDY_AUTO_CONFIGURE || 'false' }}
+    $dockerConfig = Join-Path `
+        $ProjectRoot `
+        '.docker-ci'
 
-          # 배포 중 외부 도메인까지 확인할지 여부
-          VERIFY_PUBLIC_URL: ${{ vars.VERIFY_PUBLIC_URL || 'false' }}
 
+    if (Test-Path -LiteralPath $dockerConfig) {
 
-          # --------------------------------------------------
-          # 카카오 로그인
-          #
-          # 실제 GitHub Secret 이름에 맞춤
-          # --------------------------------------------------
+        Remove-Item `
+            -LiteralPath $dockerConfig `
+            -Recurse `
+            -Force
+    }
 
-          # 카카오 REST API Key
-          KAKAO_CLIENT_ID: ${{ secrets.KAKAOCLIENTID }}
 
-          # 카카오 Client Secret
-          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAOCLIENTSECRET }}
+    New-Item `
+        -ItemType Directory `
+        -Path $dockerConfig `
+        -Force |
+        Out-Null
 
 
-          # --------------------------------------------------
-          # CLOVA OCR
-          #
-          # 아직 GitHub Secret이 없다면 빈 값으로 들어간다.
-          # 현재 web 배포에서는 필수값이 아니다.
-          # --------------------------------------------------
+    # GHCR 인증 형식:
+    #
+    # username:token
+    #
+    # 을 Base64로 인코딩한다.
 
-          CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_API_KEY }}
+    $credentialText = "${RegistryUser}:${RegistryToken}"
 
 
-          # --------------------------------------------------
-          # LLM
-          #
-          # 실제 GitHub Secret 이름:
-          # LLMAPIKEY
-          # --------------------------------------------------
+    $credentialBytes = [System.Text.Encoding]::UTF8.GetBytes(
+        $credentialText
+    )
 
-          LLM_API_KEY: ${{ secrets.LLMAPIKEY }}
 
+    $encodedCredential = [System.Convert]::ToBase64String(
+        $credentialBytes
+    )
 
-          # --------------------------------------------------
-          # Pinecone
-          #
-          # 아직 설정하지 않았다면 빈 값으로 들어간다.
-          # --------------------------------------------------
 
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+    $config = @{
+        auths = @{
+            'ghcr.io' = @{
+                auth = $encodedCredential
+            }
+        }
 
-          PINECONE_INDEX: ${{ vars.PINECONE_INDEX }}
+        cliPluginsExtraDirs = @(
+            (Join-Path $env:USERPROFILE '.docker\cli-plugins')
+        )
+    } |
+    ConvertTo-Json -Depth 6
 
 
-          # --------------------------------------------------
-          # Ellen API
-          #
-          # 아직 설정하지 않았다면 빈 값으로 들어간다.
-          # --------------------------------------------------
+    $configPath = Join-Path `
+        $dockerConfig `
+        'config.json'
 
-          ELLEN_API_KEY: ${{ secrets.ELLEN_API_KEY }}
 
-          ELLEN_API_BASE_URL: ${{ vars.ELLEN_API_BASE_URL }}
+    [System.IO.File]::WriteAllText(
+        $configPath,
+        $config,
+        [System.Text.UTF8Encoding]::new($false)
+    )
 
 
-          # --------------------------------------------------
-          # RAG 설정
-          #
-          # 현재 테스트용 임시값
-          # --------------------------------------------------
+    $env:DOCKER_CONFIG = $dockerConfig
 
-          RAG_SIMILARITY_THRESHOLD: ${{ vars.RAG_SIMILARITY_THRESHOLD || '0.80' }}
 
-          RAG_TOP_K: ${{ vars.RAG_TOP_K || '5' }}
+    # Docker Desktop Linux Engine
+    $env:DOCKER_HOST = (
+        'npipe:////./pipe/dockerDesktopLinuxEngine'
+    )
 
 
-        run: |
-          set -euo pipefail
+    Write-Host "Using Docker CI config: $dockerConfig"
 
-          python3 - <<'PY'
-          import os
-          import json
-          import base64
+    Write-Host (
+        'GHCR authentication configured ' +
+        'for non-interactive deployment.'
+    )
+}
 
 
-          keys = [
+function Remove-DockerSshConfig {
+    param(
+        [string]$DockerConfigPath
+    )
 
-              # MariaDB
-              "MARIADB_DATABASE",
-              "MARIADB_USER",
-              "MARIADB_PASSWORD",
-              "MARIADB_ROOT_PASSWORD",
+    if ([string]::IsNullOrWhiteSpace($DockerConfigPath)) {
+        return
+    }
 
-              # Spring Boot
-              "SPRING_PROFILES_ACTIVE",
-              "SPRING_DATASOURCE_URL",
-              "SPRING_DATASOURCE_USERNAME",
-              "SPRING_DATASOURCE_PASSWORD",
-              "SERVER_FORWARD_HEADERS_STRATEGY",
 
-              # FastAPI
-              "AI_BASE_URL",
+    if (-not (Test-Path -LiteralPath $DockerConfigPath)) {
+        return
+    }
 
-              # Server
-              "DAHUM_RUNTIME",
-              "DAHUM_HOST_PORT",
-              "PUBLIC_DOMAIN",
-              "PUBLIC_BASE_URL",
 
-              # MOVEAI / Caddy
-              "MOVEAI_ROOT",
-              "OUTER_CADDY_AUTO_CONFIGURE",
-              "VERIFY_PUBLIC_URL",
+    try {
 
-              # Kakao
-              "KAKAO_CLIENT_ID",
-              "KAKAO_CLIENT_SECRET",
+        Remove-Item `
+            -LiteralPath $DockerConfigPath `
+            -Recurse `
+            -Force
 
-              # OCR / LLM
-              "CLOVA_OCR_API_KEY",
-              "LLM_API_KEY",
 
-              # Pinecone
-              "PINECONE_API_KEY",
-              "PINECONE_INDEX",
+        Write-Host 'Temporary Docker CI credentials removed.'
+    }
+    catch {
 
-              # Ellen
-              "ELLEN_API_KEY",
-              "ELLEN_API_BASE_URL",
+        Write-Warning (
+            'Could not remove temporary Docker CI config: ' +
+            $_.Exception.Message
+        )
+    }
+}
 
-              # RAG
-              "RAG_SIMILARITY_THRESHOLD",
-              "RAG_TOP_K",
-          ]
 
+# ============================================================
+# Docker Compose
+#
+# 중요:
+# --env-file 사용 안 함.
+#
+# Docker Compose는 현재 PowerShell 프로세스의
+# 환경변수를 그대로 사용한다.
+# ============================================================
 
-          config = {
-              key: os.environ.get(key, "")
-              for key in keys
-          }
+function Invoke-Compose {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
 
+        [Parameter(Mandatory = $true)]
+        [string]$ComposeFile
+    )
 
-          raw = json.dumps(
-              config,
-              ensure_ascii=False,
-              separators=(",", ":")
-          ).encode("utf-8")
+    & docker compose `
+        -f $ComposeFile `
+        @Arguments
 
 
-          encoded = base64.b64encode(
-              raw
-          ).decode("ascii")
+    if ($LASTEXITCODE -ne 0) {
 
+        throw (
+            'docker compose failed: ' +
+            ($Arguments -join ' ')
+        )
+    }
+}
 
-          # Base64 안에는 실제 Secret 값들이 포함되어 있으므로
-          # GitHub Actions 로그에 출력되더라도 가려지도록 처리
-          print(f"::add-mask::{encoded}")
 
+# ============================================================
+# Container startup verification
+#
+# 애플리케이션 상태 API는 사용하지 않는다.
+# 배포 후 필수 Compose 서비스가 running 상태인지 확인한다.
+# ============================================================
 
-          github_output = os.environ["GITHUB_OUTPUT"]
+function Wait-ComposeServicesRunning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ComposeFile,
 
+        [Parameter(Mandatory = $true)]
+        [string[]]$Services,
 
-          with open(
-              github_output,
-              "a",
-              encoding="utf-8"
-          ) as output_file:
+        [int]$TimeoutSeconds = 90
+    )
 
-              output_file.write(
-                  f"config={encoded}\n"
-              )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastMissing = @($Services)
 
+    while ((Get-Date) -lt $deadline) {
 
-          print(
-              "Runtime configuration created successfully."
-          )
+        $running = @(
+            & docker compose `
+                -f $ComposeFile `
+                ps `
+                --status running `
+                --services
+        )
 
-          PY
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not inspect Docker Compose service state.'
+        }
 
+        $lastMissing = @(
+            $Services | Where-Object {
+                $running -notcontains $_
+            }
+        )
 
-      # ======================================================
-      # 8. Windows 미니 PC 배포
-      #
-      # 서버의 .env는 사용하지 않는다.
-      #
-      # 위에서 만든 RuntimeConfigBase64를
-      # deploy.ps1로 전달한다.
-      # ======================================================
+        if ($lastMissing.Count -eq 0) {
+            Write-Host (
+                'Required Docker Compose services are running: ' +
+                ($Services -join ', ')
+            )
+            return
+        }
 
-      - name: Deploy exact images to Windows mini PC
-        uses: appleboy/ssh-action@v1.2.2
+        Start-Sleep -Seconds 3
+    }
 
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+    throw (
+        'Required Docker Compose services did not reach running state ' +
+        "within $TimeoutSeconds seconds. Missing: " +
+        ($lastMissing -join ', ')
+    )
+}
 
-          # 현재 등록되어 있으므로 유지
-          # SSH Key만 사용하기로 확정하면 나중에 제거 가능
-          password: ${{ secrets.SERVER_PASSWORD }}
 
-          port: ${{ secrets.SERVER_PORT }}
+# ============================================================
+# Docker image helpers
+# ============================================================
 
-          command_timeout: 20m
+function Get-ImageBase {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Image
+    )
 
-          script: |
-            cd /d C:\home\dahum\app && git reset --hard HEAD && git clean -fd && git fetch --prune origin main && git checkout -B main origin/main && git reset --hard origin/main && git clean -fd && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"
+    $digestIndex = $Image.IndexOf('@')
+
+    if ($digestIndex -ge 0) {
+        return $Image.Substring(0, $digestIndex)
+    }
+
+    $lastSlash = $Image.LastIndexOf('/')
+    $lastColon = $Image.LastIndexOf(':')
+
+    if ($lastColon -gt $lastSlash) {
+        return $Image.Substring(0, $lastColon)
+    }
+
+    return $Image
+}
+
+
+# ============================================================
+# Rollback
+#
+# 새 이미지 배포 실패 시 이전 commit 이미지로 되돌린다.
+# ============================================================
+
+function Try-RollbackDeployment {
+    param(
+        [string]$PreviousCommit,
+
+        [string]$CurrentBackendImage,
+
+        [string]$CurrentAiImage,
+
+        [string]$ComposeFile,
+
+        [string]$ProjectRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PreviousCommit)) {
+        Write-Warning (
+            'No previous commit is available; ' +
+            'automatic rollback skipped.'
+        )
+        return
+    }
+
+    $backendBase = Get-ImageBase `
+        -Image $CurrentBackendImage
+
+    $aiBase = Get-ImageBase `
+        -Image $CurrentAiImage
+
+    $previousBackend = "$backendBase`:$PreviousCommit"
+    $previousAi = "$aiBase`:$PreviousCommit"
+
+    Write-Warning (
+        'Attempting automatic application image rollback to commit ' +
+        $PreviousCommit
+    )
+
+    try {
+        # 현재 배포 인프라(Compose 정의)는 유지한다.
+        # 이전 Git commit으로 작업 트리를 되돌리면 과거의 잘못된
+        # healthcheck/depends_on 설정까지 복원될 수 있으므로,
+        # 애플리케이션 이미지 태그만 이전 commit으로 되돌린다.
+        $env:BACKEND_IMAGE = $previousBackend
+        $env:AI_IMAGE = $previousAi
+
+        Invoke-Compose `
+            -Arguments @(
+                'config'
+            ) `
+            -ComposeFile $ComposeFile `
+            *> $null
+
+        Invoke-Compose `
+            -Arguments @(
+                'pull',
+                'backend',
+                'ai',
+                'mariadb',
+                'caddy'
+            ) `
+            -ComposeFile $ComposeFile
+
+        Invoke-Compose `
+            -Arguments @(
+                'up',
+                '-d',
+                '--remove-orphans'
+            ) `
+            -ComposeFile $ComposeFile
+
+        Wait-ComposeServicesRunning `
+            -ComposeFile $ComposeFile `
+            -Services @(
+                'backend',
+                'ai',
+                'mariadb',
+                'caddy'
+            ) `
+            -TimeoutSeconds 90
+
+        Write-Warning (
+            'Previous application images were restored successfully.'
+        )
+    }
+    catch {
+        Write-Warning (
+            'Automatic deployment rollback failed: ' +
+            $_.Exception.Message
+        )
+    }
+}
+
+
+# ============================================================
+# Paths
+# ============================================================
+
+$DeployDir = Split-Path `
+    -Parent `
+    $PSScriptRoot
+
+
+$AppPath = Split-Path `
+    -Parent `
+    $DeployDir
+
+
+$DahumHome = Split-Path `
+    -Parent `
+    $AppPath
+
+
+$RuntimePath = Join-Path `
+    $DahumHome `
+    'runtime'
+
+
+$ComposePath = Join-Path `
+    $DeployDir `
+    'docker-compose.yml'
+
+
+$EnsureDockerPath = Join-Path `
+    $PSScriptRoot `
+    'ensure_docker.ps1'
+
+
+$BackupPath = Join-Path `
+    $PSScriptRoot `
+    'backup_mariadb.ps1'
+
+
+$PublicRoutePath = Join-Path `
+    $PSScriptRoot `
+    'ensure_public_route.ps1'
+
+
+# ============================================================
+# Required files
+#
+# .env 파일은 검사하지 않는다.
+# ============================================================
+
+if (-not (Test-Path -LiteralPath $ComposePath)) {
+
+    throw "Compose file not found: $ComposePath"
+}
+
+
+if (-not (Test-Path -LiteralPath $EnsureDockerPath)) {
+
+    throw (
+        'Docker readiness script not found: ' +
+        $EnsureDockerPath
+    )
+}
+
+
+# ============================================================
+# GitHub Actions runtime configuration import
+#
+# 여기서 Actions가 전달한 값을
+# $env:XXX 형식으로 등록한다.
+# ============================================================
+
+Import-RuntimeConfig `
+    -EncodedConfig $RuntimeConfigBase64
+
+
+# ============================================================
+# Normal runtime configuration
+# ============================================================
+
+$hostPort = [int](
+    Get-EnvValue `
+        -Name 'DAHUM_HOST_PORT' `
+        -DefaultValue '9000'
+)
+
+
+$publicDomain = Get-EnvValue `
+    -Name 'PUBLIC_DOMAIN' `
+    -DefaultValue 'yellow.it.kr'
+
+
+$publicBaseUrl = Get-EnvValue `
+    -Name 'PUBLIC_BASE_URL' `
+    -DefaultValue "https://$publicDomain"
+
+
+$moveAiRoot = Get-EnvValue `
+    -Name 'MOVEAI_ROOT' `
+    -DefaultValue 'C:/MOVEAI'
+
+
+$autoConfigureOuterCaddy = (
+    Get-EnvValue `
+        -Name 'OUTER_CADDY_AUTO_CONFIGURE' `
+        -DefaultValue 'false'
+).ToLowerInvariant() -eq 'true'
+
+
+
+
+# ============================================================
+# Required environment values
+#
+# 외부 API는 아직 작업 중이므로 여기서는 강제하지 않는다.
+#
+# DB + Spring + AI 내부 주소만 필수.
+# ============================================================
+
+Assert-RequiredEnv `
+    -Names @(
+        'MARIADB_DATABASE',
+        'MARIADB_USER',
+        'MARIADB_PASSWORD',
+        'MARIADB_ROOT_PASSWORD',
+        'SPRING_DATASOURCE_URL',
+        'SPRING_DATASOURCE_USERNAME',
+        'SPRING_DATASOURCE_PASSWORD',
+        'AI_BASE_URL'
+    )
+
+
+# ============================================================
+# Docker images
+#
+# 우선순위
+#
+# 1. deploy.ps1 parameter
+# 2. GitHub Actions 환경변수
+# ============================================================
+
+if ([string]::IsNullOrWhiteSpace($BackendImage)) {
+
+    $BackendImage = Get-EnvValue `
+        -Name 'BACKEND_IMAGE'
+}
+
+
+if ([string]::IsNullOrWhiteSpace($AiImage)) {
+
+    $AiImage = Get-EnvValue `
+        -Name 'AI_IMAGE'
+}
+
+
+if (
+    [string]::IsNullOrWhiteSpace($BackendImage) -or
+    [string]::IsNullOrWhiteSpace($AiImage)
+) {
+
+    throw (
+        'BACKEND_IMAGE and AI_IMAGE must be ' +
+        'supplied by GitHub Actions.'
+    )
+}
+
+
+$env:BACKEND_IMAGE = $BackendImage
+
+$env:AI_IMAGE = $AiImage
+
+
+# ============================================================
+# Repository
+# ============================================================
+
+Set-Location `
+    -LiteralPath `
+    $AppPath
+
+
+if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
+    $RollbackCommit = (
+        git rev-parse HEAD
+    ).Trim()
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not determine current Git commit for rollback.'
+    }
+}
+
+
+if (-not $SkipGitUpdate) {
+
+    Write-Host (
+        'Force-syncing repository to origin/main...'
+    )
+
+    # 배포 서버는 작업 공간으로 사용하지 않는다.
+    # tracked local changes와 untracked files 때문에 자동 배포가 막히지 않도록
+    # 현재 작업 트리를 먼저 정리한다. ignored files는 보존한다.
+    git reset `
+        --hard `
+        HEAD
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git reset --hard HEAD failed.'
+    }
+
+    git clean `
+        -fd
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git clean failed.'
+    }
+
+    # fetch는 merge를 수행하지 않으므로 로컬 변경과 충돌하지 않는다.
+    git fetch `
+        --prune `
+        origin `
+        main
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git fetch failed.'
+    }
+
+    # main을 origin/main에서 강제로 재생성하여 checkout 충돌까지 제거한다.
+    git checkout `
+        -B `
+        main `
+        origin/main
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git checkout -B main origin/main failed.'
+    }
+
+    # 최종적으로 서버 코드를 원격 main과 정확히 일치시킨다.
+    git reset `
+        --hard `
+        origin/main
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git reset --hard origin/main failed.'
+    }
+
+    # checkout/reset 과정에서 남을 수 있는 untracked files를 한 번 더 정리한다.
+    git clean `
+        -fd
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'final git clean failed.'
+    }
+}
+else {
+    Write-Host (
+        'SkipGitUpdate=true; repository update skipped.'
+    )
+}
+
+
+# ============================================================
+# Docker availability
+# ============================================================
+
+Write-Host 'Ensuring Docker is available...'
+
+
+& $EnsureDockerPath
+
+
+if ($LASTEXITCODE -ne 0) {
+
+    throw 'Docker readiness check failed.'
+}
+
+
+# ============================================================
+# Temporary GHCR authentication
+# ============================================================
+
+$temporaryDockerConfig = $null
+
+# 실제 컨테이너 변경이 시작된 뒤에만 롤백한다.
+# 백업/검증/pull 단계의 실패는 현재 실행 중인 배포를 변경하지 않는다.
+$rollbackRequired = $false
+
+
+try {
+
+    Initialize-DockerSshConfig `
+        -ProjectRoot $AppPath `
+        -RegistryUser $RegistryUser `
+        -RegistryToken $RegistryToken
+
+    $temporaryDockerConfig = $env:DOCKER_CONFIG
+
+    # ========================================================
+    # Deploy information
+    # ========================================================
+
+    Write-Host (
+        "Deploying backend image: $BackendImage"
+    )
+
+
+    Write-Host (
+        "Deploying AI image: $AiImage"
+    )
+
+
+    # ========================================================
+    # Validate Compose
+    # ========================================================
+
+    Write-Host (
+        'Validating Docker Compose configuration...'
+    )
+
+
+    Invoke-Compose `
+        -Arguments @(
+            'config'
+        ) `
+        -ComposeFile $ComposePath `
+        *> $null
+
+
+    # ========================================================
+    # Existing services
+    # ========================================================
+
+    $running = & docker compose `
+        -f $ComposePath `
+        ps `
+        --status running `
+        --services
+
+
+    if ($LASTEXITCODE -ne 0) {
+
+        throw (
+            'Could not inspect current Docker services.'
+        )
+    }
+
+
+    # ========================================================
+    # MariaDB backup
+    #
+    # backup_mariadb.ps1 역시
+    # .env 없는 방식으로 수정되어 있어야 한다.
+    # ========================================================
+
+    if ($running -contains 'mariadb') {
+
+        if (Test-Path -LiteralPath $BackupPath) {
+
+            Write-Host (
+                'Backing up MariaDB before deployment...'
+            )
+
+
+            try {
+                & $BackupPath `
+                    -ComposePath $ComposePath `
+                    -RuntimePath $RuntimePath
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw 'MariaDB backup script returned a non-zero exit code.'
+                }
+            }
+            catch {
+                # 현재 단계에서는 DB/API 연동이 배포 필수 성공 조건이 아니다.
+                # 백업 실패는 기록하되 애플리케이션 배포 자체는 계속한다.
+                Write-Warning (
+                    'MariaDB backup could not be completed; ' +
+                    'deployment will continue. Reason: ' +
+                    $_.Exception.Message
+                )
+            }
+        }
+        else {
+
+            Write-Warning (
+                'MariaDB backup script was not found. ' +
+                'Deployment will continue without backup.'
+            )
+        }
+    }
+    else {
+
+        Write-Host (
+            'MariaDB is not running yet; ' +
+            'backup skipped for first deployment.'
+        )
+    }
+
+
+    # ========================================================
+    # Pull
+    # ========================================================
+
+    Write-Host (
+        'Pulling application and infrastructure images...'
+    )
+
+
+    Invoke-Compose `
+        -Arguments @(
+            'pull',
+            'backend',
+            'ai',
+            'mariadb',
+            'caddy'
+        ) `
+        -ComposeFile $ComposePath
+
+
+    # ========================================================
+    # Start
+    # ========================================================
+
+    Write-Host (
+        'Starting containers without building ' +
+        'on the mini PC...'
+    )
+
+
+    # 이 시점부터 docker compose up이 일부 컨테이너를 변경할 수 있으므로
+    # 이후 실패에는 자동 롤백을 허용한다.
+    $rollbackRequired = $true
+
+    Invoke-Compose `
+        -Arguments @(
+            'up',
+            '-d',
+            '--remove-orphans'
+        ) `
+        -ComposeFile $ComposePath
+
+
+    # ========================================================
+    # Container startup verification
+    # ========================================================
+
+    Write-Host (
+        'Waiting for required containers to enter running state...'
+    )
+
+    Wait-ComposeServicesRunning `
+        -ComposeFile $ComposePath `
+        -Services @(
+            'backend',
+            'ai',
+            'mariadb',
+            'caddy'
+        ) `
+        -TimeoutSeconds 90
+
+
+    # ========================================================
+    # Docker cleanup
+    #
+    # dangling layer만 제거.
+    # rollback 이미지는 유지.
+    # ========================================================
+
+    Write-Host (
+        'Removing dangling Docker layers only; ' +
+        'rollback-tagged images are retained.'
+    )
+
+
+    & docker image prune -f |
+        Out-Host
+
+
+    # ========================================================
+    # Existing MOVEAI Caddy
+    # ========================================================
+
+    if ($autoConfigureOuterCaddy) {
+
+        if (-not (Test-Path -LiteralPath $PublicRoutePath)) {
+            throw (
+                'Public route configuration script not found: ' +
+                $PublicRoutePath
+            )
+        }
+
+        & $PublicRoutePath `
+            -MoveAiRoot $moveAiRoot `
+            -Domain $publicDomain `
+            -DahumHostPort $hostPort
+
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Public route configuration failed.'
+        }
+    }
+    else {
+
+        Write-Host (
+            'OUTER_CADDY_AUTO_CONFIGURE=false; ' +
+            'existing MOVEAI Caddyfile was not modified.'
+        )
+    }
+
+
+    # ========================================================
+    # Final Docker status
+    # ========================================================
+
+    Write-Host (
+        'Final Docker Compose status:'
+    )
+
+
+    & docker compose `
+        -f $ComposePath `
+        ps
+
+
+    if ($LASTEXITCODE -ne 0) {
+
+        throw (
+            'Could not display final Docker Compose status.'
+        )
+    }
+
+
+    Write-Host (
+        'Deployment completed. ' +
+        "Local gateway: http://127.0.0.1:$hostPort"
+    )
+
+
+    Write-Host (
+        "Public URL: $publicBaseUrl"
+    )
+}
+catch {
+
+    $deploymentError = $_
+
+
+    Write-Warning (
+        'Application deployment failed: ' +
+        $deploymentError.Exception.Message
+    )
+
+
+    # ========================================================
+    # 실패 시 현재 컨테이너 상태
+    # ========================================================
+
+    try {
+
+        Write-Host (
+            'Docker Compose status after deployment failure:'
+        )
+
+
+        & docker compose `
+            -f $ComposePath `
+            ps |
+            Out-Host
+    }
+    catch {
+        # 진단 실패가 원래 오류를 덮지 않도록 무시
+    }
+
+
+    # ========================================================
+    # 실패 시 최근 로그
+    # ========================================================
+
+    try {
+
+        Write-Host 'Recent Docker logs:'
+
+
+        & docker compose `
+            -f $ComposePath `
+            logs `
+            --tail 120 `
+            backend `
+            ai `
+            mariadb `
+            caddy |
+            Out-Host
+    }
+    catch {
+        # 로그 조회 실패가 원래 오류를 덮지 않도록 무시
+    }
+
+
+    # ========================================================
+    # Rollback
+    # ========================================================
+
+    if ($rollbackRequired) {
+        Try-RollbackDeployment `
+            -PreviousCommit $RollbackCommit `
+            -CurrentBackendImage $BackendImage `
+            -CurrentAiImage $AiImage `
+            -ComposeFile $ComposePath `
+            -ProjectRoot $AppPath
+    }
+    else {
+        Write-Warning (
+            'Deployment failed before container changes began; ' +
+            'automatic rollback was skipped.'
+        )
+    }
+
+
+    throw $deploymentError
+}
+finally {
+
+    # ========================================================
+    # GHCR 임시 인증정보 제거
+    #
+    # 성공/실패와 상관없이 반드시 실행.
+    # ========================================================
+
+    Remove-DockerSshConfig `
+        -DockerConfigPath $temporaryDockerConfig
+}

@@ -796,6 +796,10 @@ if ($LASTEXITCODE -ne 0) {
 
 $temporaryDockerConfig = $null
 
+# 실제 컨테이너 변경이 시작된 뒤에만 롤백한다.
+# 백업/검증/pull 단계의 실패는 현재 실행 중인 배포를 변경하지 않는다.
+$rollbackRequired = $false
+
 
 try {
 
@@ -872,14 +876,23 @@ try {
             )
 
 
-            & $BackupPath `
-                -ComposePath $ComposePath `
-                -RuntimePath $RuntimePath
+            try {
+                & $BackupPath `
+                    -ComposePath $ComposePath `
+                    -RuntimePath $RuntimePath
 
-
-            if ($LASTEXITCODE -ne 0) {
-
-                throw 'MariaDB backup failed.'
+                if ($LASTEXITCODE -ne 0) {
+                    throw 'MariaDB backup script returned a non-zero exit code.'
+                }
+            }
+            catch {
+                # 현재 단계에서는 DB/API 연동이 배포 필수 성공 조건이 아니다.
+                # 백업 실패는 기록하되 애플리케이션 배포 자체는 계속한다.
+                Write-Warning (
+                    'MariaDB backup could not be completed; ' +
+                    'deployment will continue. Reason: ' +
+                    $_.Exception.Message
+                )
             }
         }
         else {
@@ -928,6 +941,10 @@ try {
         'on the mini PC...'
     )
 
+
+    # 이 시점부터 docker compose up이 일부 컨테이너를 변경할 수 있으므로
+    # 이후 실패에는 자동 롤백을 허용한다.
+    $rollbackRequired = $true
 
     Invoke-Compose `
         -Arguments @(
@@ -1097,12 +1114,20 @@ catch {
     # Rollback
     # ========================================================
 
-    Try-RollbackDeployment `
-        -PreviousCommit $RollbackCommit `
-        -CurrentBackendImage $BackendImage `
-        -CurrentAiImage $AiImage `
-        -ComposeFile $ComposePath `
-        -ProjectRoot $AppPath
+    if ($rollbackRequired) {
+        Try-RollbackDeployment `
+            -PreviousCommit $RollbackCommit `
+            -CurrentBackendImage $BackendImage `
+            -CurrentAiImage $AiImage `
+            -ComposeFile $ComposePath `
+            -ProjectRoot $AppPath
+    }
+    else {
+        Write-Warning (
+            'Deployment failed before container changes began; ' +
+            'automatic rollback was skipped.'
+        )
+    }
 
 
     throw $deploymentError

@@ -1,33 +1,17 @@
-name: dahum
-
 services:
-  # ==========================================================
-  # MariaDB
-  # 닿음 서비스 데이터베이스
-  # ==========================================================
   mariadb:
-    image: ${MARIADB_IMAGE:-mariadb:11.4}
+    image: ${MARIADB_IMAGE}
     restart: unless-stopped
     environment:
-      # 사용할 DB 이름
       MARIADB_DATABASE: ${MARIADB_DATABASE}
-      # 닿음 서비스 DB 사용자
       MARIADB_USER: ${MARIADB_USER}
-      # 닿음 서비스 DB 비밀번호
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
-      # MariaDB 관리자(root) 비밀번호
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
     volumes:
-      # 실제 DB 데이터 저장 위치
       - ${DAHUM_RUNTIME}/data/mariadb:/var/lib/mysql
-      # 최초 DB 초기화 SQL
       - ../db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test:
-        - CMD
-        - healthcheck.sh
-        - --connect
-        - --innodb_initialized
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -35,38 +19,26 @@ services:
     networks:
       - dahum_internal
 
-  # ==========================================================
-  # FastAPI AI 서버
-  # OCR / LLM / RAG / 약 정보 연동
-  # ==========================================================
   ai:
     image: ${AI_IMAGE:?AI_IMAGE is required}
     restart: unless-stopped
     environment:
-      # CLOVA OCR 인증키
-      CLOVA_OCR_API_KEY: ${CLOVA_OCR_API_KEY:-}
-      # LLM 인증키
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      # Pinecone 인증키
-      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
-      # Pinecone 인덱스 이름
-      PINECONE_INDEX: ${PINECONE_INDEX:-}
-      # Ellen API 인증키
-      ELLEN_API_KEY: ${ELLEN_API_KEY:-}
-      # Ellen API 기본 주소
-      ELLEN_API_BASE_URL: ${ELLEN_API_BASE_URL:-}
-      # RAG 유사도 기준
-      RAG_SIMILARITY_THRESHOLD: ${RAG_SIMILARITY_THRESHOLD:-0.80}
-      # RAG 검색 결과 개수
-      RAG_TOP_K: ${RAG_TOP_K:-5}
+      CLOVA_OCR_API_KEY: ${CLOVA_OCR_API_KEY}
+      LLM_API_KEY: ${LLM_API_KEY}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_INDEX: ${PINECONE_INDEX}
+      RAG_SIMILARITY_THRESHOLD: ${RAG_SIMILARITY_THRESHOLD}
+      RAG_TOP_K: ${RAG_TOP_K}
     expose:
       - "8000"
     healthcheck:
       test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1', 8000), 3); s.close()"
+        ]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -74,10 +46,6 @@ services:
     networks:
       - dahum_internal
 
-  # ==========================================================
-  # Spring Boot + React
-  # 메인 백엔드 + 웹
-  # ==========================================================
   backend:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
     restart: unless-stopped
@@ -87,53 +55,35 @@ services:
       ai:
         condition: service_healthy
     environment:
-      # Spring 운영 프로필
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
-      # MariaDB 내부 연결 주소
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
       SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
-      # DB 사용자
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
-      # DB 비밀번호
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
-      # FastAPI 내부 주소
-      AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
-      # 외부 접속 주소
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://yellow.it.kr}
-      # HTTPS / reverse proxy 처리
-      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-framework}
-      # 카카오 REST API Key
-      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
-      # 카카오 Client Secret
-      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      AI_BASE_URL: ${AI_BASE_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
     expose:
       - "8080"
     networks:
       - dahum_internal
       - dahum_web
 
-  # ==========================================================
-  # Dahum 내부 Caddy
-  #
-  # 미니PC 9000번 포트로 노출
-  # 기존 MOVEAI Caddy가 yellow.it.kr 요청을 여기로 전달
-  # ==========================================================
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
     depends_on:
       - backend
     ports:
-      - "${DAHUM_HOST_PORT:-9000}:80"
+      - "${DAHUM_HOST_PORT}:80"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
       - dahum_web
 
-# ============================================================
-# Docker 내부 네트워크
-# ============================================================
 networks:
-  # DB / AI / Backend 내부 통신
   dahum_internal:
-  # Backend / Caddy 통신
   dahum_web:

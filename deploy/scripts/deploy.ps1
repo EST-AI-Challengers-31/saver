@@ -709,9 +709,28 @@ if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
 if (-not $SkipGitUpdate) {
 
     Write-Host (
-        'Updating repository to the latest origin/main...'
+        'Force-syncing repository to origin/main...'
     )
 
+    # 배포 서버는 작업 공간으로 사용하지 않는다.
+    # tracked local changes와 untracked files 때문에 자동 배포가 막히지 않도록
+    # 현재 작업 트리를 먼저 정리한다. ignored files는 보존한다.
+    git reset `
+        --hard `
+        HEAD
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git reset --hard HEAD failed.'
+    }
+
+    git clean `
+        -fd
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'git clean failed.'
+    }
+
+    # fetch는 merge를 수행하지 않으므로 로컬 변경과 충돌하지 않는다.
     git fetch `
         --prune `
         origin `
@@ -721,19 +740,31 @@ if (-not $SkipGitUpdate) {
         throw 'git fetch failed.'
     }
 
-    git checkout main
+    # main을 origin/main에서 강제로 재생성하여 checkout 충돌까지 제거한다.
+    git checkout `
+        -B `
+        main `
+        origin/main
 
     if ($LASTEXITCODE -ne 0) {
-        throw 'git checkout main failed.'
+        throw 'git checkout -B main origin/main failed.'
     }
 
-    # 서버의 로컬 변경을 배포 상태에 섞지 않는다.
+    # 최종적으로 서버 코드를 원격 main과 정확히 일치시킨다.
     git reset `
         --hard `
         origin/main
 
     if ($LASTEXITCODE -ne 0) {
-        throw 'git reset failed.'
+        throw 'git reset --hard origin/main failed.'
+    }
+
+    # checkout/reset 과정에서 남을 수 있는 untracked files를 한 번 더 정리한다.
+    git clean `
+        -fd
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'final git clean failed.'
     }
 }
 else {

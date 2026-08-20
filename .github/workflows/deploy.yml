@@ -1,3 +1,6 @@
+
+
+
 name: Build images and deploy Dahum
 
 on:
@@ -233,18 +236,6 @@ jobs:
 
 
           # --------------------------------------------------
-          # 배포 Health Check
-          #
-          # 현재 외부 API 연동이 완료되지 않았으므로 web
-          #
-          # 나중에 전체 연동 완료 후:
-          # full
-          # --------------------------------------------------
-
-          DEPLOY_HEALTH_MODE: ${{ vars.DEPLOY_HEALTH_MODE || 'web' }}
-
-
-          # --------------------------------------------------
           # 카카오 로그인
           #
           # 실제 GitHub Secret 이름에 맞춤
@@ -348,9 +339,6 @@ jobs:
               "OUTER_CADDY_AUTO_CONFIGURE",
               "VERIFY_PUBLIC_URL",
 
-              # Deployment
-              "DEPLOY_HEALTH_MODE",
-
               # Kakao
               "KAKAO_CLIENT_ID",
               "KAKAO_CLIENT_SECRET",
@@ -443,4 +431,4 @@ jobs:
           command_timeout: 20m
 
           script: |
-            cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout main && git pull --ff-only origin main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"
+            cd /d C:\home\dahum\app && git reset --hard HEAD && git clean -fd && git fetch --prune origin main && git checkout -B main origin/main && git reset --hard origin/main && git clean -fd && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy.ps1 -SkipGitUpdate -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"

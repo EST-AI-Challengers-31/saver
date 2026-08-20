@@ -1,3 +1,6 @@
+
+
+
 name: Build images and deploy Dahum
 
 on:
@@ -154,6 +157,9 @@ jobs:
           # MariaDB
           # --------------------------------------------------
 
+          # MariaDB 이미지
+          MARIADB_IMAGE: ${{ vars.MARIADB_IMAGE || 'mariadb:11.4' }}
+
           # 사용할 DB 이름
           MARIADB_DATABASE: ${{ vars.MARIADB_DATABASE || 'dahum' }}
 
@@ -252,7 +258,7 @@ jobs:
           # 현재 web 배포에서는 필수값이 아니다.
           # --------------------------------------------------
 
-          CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_API_KEY }}
+          CLOVA_OCR_API_KEY: ${{ secrets.CLOVA_OCR_SECRET }}
 
 
           # --------------------------------------------------
@@ -310,6 +316,7 @@ jobs:
           keys = [
 
               # MariaDB
+              "MARIADB_IMAGE",
               "MARIADB_DATABASE",
               "MARIADB_USER",
               "MARIADB_PASSWORD",

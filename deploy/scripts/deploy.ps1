@@ -324,130 +324,61 @@ function Invoke-Compose {
 
 
 # ============================================================
-# Health check
+# Container startup verification
 #
-# web
-#   현재 개발 단계용
-#   웹 페이지가 정상 응답하면 성공
-#
-# full
-#   최종 운영 단계용
-#   backend + database + ai 모두 UP 필요
+# 애플리케이션 상태 API는 사용하지 않는다.
+# 배포 후 필수 Compose 서비스가 running 상태인지 확인한다.
 # ============================================================
 
-function Wait-DahumHealthy {
+function Wait-ComposeServicesRunning {
     param(
         [Parameter(Mandatory = $true)]
-        [int]$HostPort,
+        [string]$ComposeFile,
 
-        [ValidateSet(
-            'web',
-            'full'
-        )]
-        [string]$Mode = 'web',
+        [Parameter(Mandatory = $true)]
+        [string[]]$Services,
 
-        [int]$TimeoutSeconds = 180
+        [int]$TimeoutSeconds = 90
     )
 
-    $deadline = (
-        Get-Date
-    ).AddSeconds(
-        $TimeoutSeconds
-    )
-
-
-    $lastMessage = 'No health response yet.'
-
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastMissing = @($Services)
 
     while ((Get-Date) -lt $deadline) {
 
-        try {
+        $running = @(
+            & docker compose `
+                -f $ComposeFile `
+                ps `
+                --status running `
+                --services
+        )
 
-            # ------------------------------------------------
-            # WEB MODE
-            # ------------------------------------------------
-
-            if ($Mode -eq 'web') {
-
-                $response = Invoke-WebRequest `
-                    -Uri "http://127.0.0.1:$HostPort/" `
-                    -UseBasicParsing `
-                    -TimeoutSec 10
-
-
-                $lastMessage = (
-                    'HTTP status: ' +
-                    [string]$response.StatusCode
-                )
-
-
-                if (
-                    $response.StatusCode -ge 200 -and
-                    $response.StatusCode -lt 400
-                ) {
-
-                    Write-Host (
-                        'Dahum WEB health check passed: ' +
-                        $lastMessage
-                    )
-
-                    return
-                }
-            }
-
-
-            # ------------------------------------------------
-            # FULL MODE
-            # ------------------------------------------------
-
-            else {
-
-                $status = Invoke-RestMethod `
-                    -Uri (
-                        "http://127.0.0.1:" +
-                        "$HostPort/api/system/status"
-                    ) `
-                    -TimeoutSec 10
-
-
-                $lastMessage = (
-                    $status |
-                    ConvertTo-Json `
-                        -Compress `
-                        -Depth 5
-                )
-
-
-                if (
-                    $status.backend -eq 'UP' -and
-                    $status.database -eq 'UP' -and
-                    $status.ai -eq 'UP'
-                ) {
-
-                    Write-Host (
-                        'Dahum FULL health check passed: ' +
-                        $lastMessage
-                    )
-
-                    return
-                }
-            }
-        }
-        catch {
-
-            $lastMessage = $_.Exception.Message
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not inspect Docker Compose service state.'
         }
 
+        $lastMissing = @(
+            $Services | Where-Object {
+                $running -notcontains $_
+            }
+        )
 
-        Start-Sleep -Seconds 5
+        if ($lastMissing.Count -eq 0) {
+            Write-Host (
+                'Required Docker Compose services are running: ' +
+                ($Services -join ', ')
+            )
+            return
+        }
+
+        Start-Sleep -Seconds 3
     }
 
-
     throw (
-        'Dahum did not become healthy within ' +
-        "$TimeoutSeconds seconds. " +
-        "Mode=$Mode. " +
-        "Last result: $lastMessage"
+        'Required Docker Compose services did not reach running state ' +
+        "within $TimeoutSeconds seconds. Missing: " +
+        ($lastMissing -join ', ')
     )
 }
 
@@ -462,18 +393,18 @@ function Get-ImageBase {
         [string]$Image
     )
 
+    $digestIndex = $Image.IndexOf('@')
+
+    if ($digestIndex -ge 0) {
+        return $Image.Substring(0, $digestIndex)
+    }
+
     $lastSlash = $Image.LastIndexOf('/')
     $lastColon = $Image.LastIndexOf(':')
 
-
     if ($lastColon -gt $lastSlash) {
-
-        return $Image.Substring(
-            0,
-            $lastColon
-        )
+        return $Image.Substring(0, $lastColon)
     }
-
 
     return $Image
 }
@@ -485,7 +416,7 @@ function Get-ImageBase {
 # 새 이미지 배포 실패 시 이전 commit 이미지로 되돌린다.
 # ============================================================
 
-function Try-RollbackImages {
+function Try-RollbackDeployment {
     param(
         [string]$PreviousCommit,
 
@@ -495,65 +426,62 @@ function Try-RollbackImages {
 
         [string]$ComposeFile,
 
-        [int]$HostPort,
-
-        [ValidateSet(
-            'web',
-            'full'
-        )]
-        [string]$HealthMode = 'web'
+        [string]$ProjectRoot
     )
 
     if ([string]::IsNullOrWhiteSpace($PreviousCommit)) {
-
         Write-Warning (
             'No previous commit is available; ' +
-            'image rollback skipped.'
+            'automatic rollback skipped.'
         )
-
         return
     }
-
 
     $backendBase = Get-ImageBase `
         -Image $CurrentBackendImage
 
-
     $aiBase = Get-ImageBase `
         -Image $CurrentAiImage
 
-
-    $previousBackend = (
-        "$backendBase`:$PreviousCommit"
-    )
-
-
-    $previousAi = (
-        "$aiBase`:$PreviousCommit"
-    )
-
+    $previousBackend = "$backendBase`:$PreviousCommit"
+    $previousAi = "$aiBase`:$PreviousCommit"
 
     Write-Warning (
-        'Attempting image rollback to commit ' +
+        'Attempting automatic rollback to commit ' +
         $PreviousCommit
     )
 
-
-    # Compose가 읽을 환경변수 변경
-    $env:BACKEND_IMAGE = $previousBackend
-    $env:AI_IMAGE = $previousAi
-
-
     try {
+        Set-Location -LiteralPath $ProjectRoot
+
+        git reset `
+            --hard `
+            $PreviousCommit
+
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Git rollback failed.'
+        }
+
+        # 이전 commit의 Compose 정의와 이전 application image를 함께 사용한다.
+        $env:BACKEND_IMAGE = $previousBackend
+        $env:AI_IMAGE = $previousAi
+
+        Invoke-Compose `
+            -Arguments @(
+                'config'
+            ) `
+            -ComposeFile $ComposeFile `
+            *> $null
 
         Invoke-Compose `
             -Arguments @(
                 'pull',
                 'backend',
-                'ai'
+                'ai',
+                'mariadb',
+                'caddy'
             ) `
             -ComposeFile $ComposeFile
-
 
         Invoke-Compose `
             -Arguments @(
@@ -563,21 +491,23 @@ function Try-RollbackImages {
             ) `
             -ComposeFile $ComposeFile
 
-
-        Wait-DahumHealthy `
-            -HostPort $HostPort `
-            -Mode $HealthMode `
-            -TimeoutSeconds 120
-
+        Wait-ComposeServicesRunning `
+            -ComposeFile $ComposeFile `
+            -Services @(
+                'backend',
+                'ai',
+                'mariadb',
+                'caddy'
+            ) `
+            -TimeoutSeconds 90
 
         Write-Warning (
-            'Previous GHCR images were restored successfully.'
+            'Previous deployment was restored successfully.'
         )
     }
     catch {
-
         Write-Warning (
-            'Automatic image rollback failed: ' +
+            'Automatic deployment rollback failed: ' +
             $_.Exception.Message
         )
     }
@@ -693,37 +623,6 @@ $autoConfigureOuterCaddy = (
 ).ToLowerInvariant() -eq 'true'
 
 
-$verifyPublicUrl = (
-    Get-EnvValue `
-        -Name 'VERIFY_PUBLIC_URL' `
-        -DefaultValue 'false'
-).ToLowerInvariant() -eq 'true'
-
-
-$healthMode = (
-    Get-EnvValue `
-        -Name 'DEPLOY_HEALTH_MODE' `
-        -DefaultValue 'web'
-).ToLowerInvariant()
-
-
-if ($healthMode -notin @(
-    'web',
-    'full'
-)) {
-
-    throw (
-        'DEPLOY_HEALTH_MODE must be ' +
-        "'web' or 'full'."
-    )
-}
-
-
-Write-Host "Dahum host port: $hostPort"
-
-Write-Host "Public domain: $publicDomain"
-
-Write-Host "Deployment health mode: $healthMode"
 
 
 # ============================================================
@@ -796,14 +695,22 @@ Set-Location `
     $AppPath
 
 
+if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
+    $RollbackCommit = (
+        git rev-parse HEAD
+    ).Trim()
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not determine current Git commit for rollback.'
+    }
+}
+
+
 if (-not $SkipGitUpdate) {
 
-    # 현재 commit을 rollback용으로 저장
-    if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
-        $RollbackCommit = (
-            git rev-parse HEAD
-        ).Trim()
-    }
+    Write-Host (
+        'Updating repository to the latest origin/main...'
+    )
 
     git fetch `
         --prune `
@@ -820,68 +727,20 @@ if (-not $SkipGitUpdate) {
         throw 'git checkout main failed.'
     }
 
-    git pull `
-        --ff-only `
-        origin `
-        main
-
-    if ($LASTEXITCODE -ne 0) {
-        throw 'git pull failed.'
-    }
-}
-    # 로컬 변경 사항을 무시하고 최신 origin/main 상태로 강제 복구
+    # 서버의 로컬 변경을 배포 상태에 섞지 않는다.
     git reset `
         --hard `
         origin/main
 
-
     if ($LASTEXITCODE -ne 0) {
-
         throw 'git reset failed.'
     }
-
-
-    # 현재 commit을 rollback용으로 저장
-    if ([string]::IsNullOrWhiteSpace($RollbackCommit)) {
-
-        $RollbackCommit = (
-            git rev-parse HEAD
-        ).Trim()
-    }
-
-
-    git fetch `
-        --prune `
-        origin `
-        main
-
-
-    if ($LASTEXITCODE -ne 0) {
-
-        throw 'git fetch failed.'
-    }
-
-
-    git checkout main
-
-
-    if ($LASTEXITCODE -ne 0) {
-
-        throw 'git checkout main failed.'
-    }
-
-
-    git pull `
-        --ff-only `
-        origin `
-        main
-
-
-    if ($LASTEXITCODE -ne 0) {
-
-        throw 'git pull failed.'
-    }
-
+}
+else {
+    Write-Host (
+        'SkipGitUpdate=true; repository update skipped.'
+    )
+}
 
 
 # ============================================================
@@ -904,16 +763,17 @@ if ($LASTEXITCODE -ne 0) {
 # Temporary GHCR authentication
 # ============================================================
 
-Initialize-DockerSshConfig `
-    -ProjectRoot $AppPath `
-    -RegistryUser $RegistryUser `
-    -RegistryToken $RegistryToken
-
-
-$temporaryDockerConfig = $env:DOCKER_CONFIG
+$temporaryDockerConfig = $null
 
 
 try {
+
+    Initialize-DockerSshConfig `
+        -ProjectRoot $AppPath `
+        -RegistryUser $RegistryUser `
+        -RegistryToken $RegistryToken
+
+    $temporaryDockerConfig = $env:DOCKER_CONFIG
 
     # ========================================================
     # Deploy information
@@ -926,11 +786,6 @@ try {
 
     Write-Host (
         "Deploying AI image: $AiImage"
-    )
-
-
-    Write-Host (
-        "Deployment health mode: $healthMode"
     )
 
 
@@ -1053,18 +908,22 @@ try {
 
 
     # ========================================================
-    # Health
+    # Container startup verification
     # ========================================================
 
     Write-Host (
-        'Waiting for Dahum health check...'
+        'Waiting for required containers to enter running state...'
     )
 
-
-    Wait-DahumHealthy `
-        -HostPort $hostPort `
-        -Mode $healthMode `
-        -TimeoutSeconds 180
+    Wait-ComposeServicesRunning `
+        -ComposeFile $ComposePath `
+        -Services @(
+            'backend',
+            'ai',
+            'mariadb',
+            'caddy'
+        ) `
+        -TimeoutSeconds 90
 
 
     # ========================================================
@@ -1090,48 +949,27 @@ try {
 
     if ($autoConfigureOuterCaddy) {
 
+        if (-not (Test-Path -LiteralPath $PublicRoutePath)) {
+            throw (
+                'Public route configuration script not found: ' +
+                $PublicRoutePath
+            )
+        }
+
         & $PublicRoutePath `
             -MoveAiRoot $moveAiRoot `
             -Domain $publicDomain `
             -DahumHostPort $hostPort
+
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Public route configuration failed.'
+        }
     }
     else {
 
         Write-Host (
             'OUTER_CADDY_AUTO_CONFIGURE=false; ' +
             'existing MOVEAI Caddyfile was not modified.'
-        )
-    }
-
-
-    # ========================================================
-    # Optional public URL verification
-    # ========================================================
-
-    if ($verifyPublicUrl) {
-
-        $publicHealth = Invoke-RestMethod `
-            -Uri "$publicBaseUrl/api/health" `
-            -TimeoutSec 20
-
-
-        if ($publicHealth.status -ne 'UP') {
-
-            throw (
-                'Public health endpoint did not report UP.'
-            )
-        }
-
-
-        Write-Host (
-            'Public domain verification passed.'
-        )
-    }
-    else {
-
-        Write-Host (
-            'VERIFY_PUBLIC_URL=false; ' +
-            'public URL check skipped.'
         )
     }
 
@@ -1173,7 +1011,7 @@ catch {
     $deploymentError = $_
 
 
-    Write-Error (
+    Write-Warning (
         'Application deployment failed: ' +
         $deploymentError.Exception.Message
     )
@@ -1228,13 +1066,12 @@ catch {
     # Rollback
     # ========================================================
 
-    Try-RollbackImages `
+    Try-RollbackDeployment `
         -PreviousCommit $RollbackCommit `
         -CurrentBackendImage $BackendImage `
         -CurrentAiImage $AiImage `
         -ComposeFile $ComposePath `
-        -HostPort $hostPort `
-        -HealthMode $healthMode
+        -ProjectRoot $AppPath
 
 
     throw $deploymentError

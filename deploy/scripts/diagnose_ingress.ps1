@@ -70,6 +70,59 @@ function Show-DockerPublishedPorts {
     }
 }
 
+function Show-SharedEdgeProxy {
+    param([int]$DahumPort)
+
+    $edgeContainerId = $null
+    try {
+        $edgeContainerId = [string](& docker ps --filter 'name=^/moveai-caddy-1$' --format '{{.ID}}' 2>$null | Select-Object -First 1)
+    }
+    catch {
+        $edgeContainerId = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($edgeContainerId)) {
+        Write-Host '--- Shared edge proxy ---'
+        Write-Host 'moveai-caddy-1 was not found.'
+        return
+    }
+
+    Write-Host '--- Shared edge proxy: moveai-caddy-1 ---'
+    Write-Host ('container_id=' + $edgeContainerId)
+
+    Write-Host 'Mounts:'
+    & docker inspect $edgeContainerId --format '{{range .Mounts}}{{println .Type "|" .Source "->" .Destination "|rw=" .RW}}{{end}}' 2>&1 |
+        ForEach-Object { Write-Host $_ }
+
+    Write-Host 'Networks:'
+    & docker inspect $edgeContainerId --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' 2>&1 |
+        ForEach-Object { Write-Host $_ }
+
+    Write-Host 'Caddyfile:'
+    & docker exec $edgeContainerId sh -c 'if [ -f /etc/caddy/Caddyfile ]; then sed -n "1,240p" /etc/caddy/Caddyfile; else echo "Caddyfile not found"; fi' 2>&1 |
+        ForEach-Object { Write-Host $_ }
+
+    $targetUrl = "http://host.docker.internal:$DahumPort/"
+    Write-Host ('Shared-edge reachability probe: ' + $targetUrl)
+    $probeCommand = 'wget -q -T 5 -O - "' + $targetUrl + '"'
+    try {
+        $content = (& docker exec $edgeContainerId sh -c $probeCommand 2>$null | Out-String)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0 -and $content -match '<title>닿음 \| 가족 보안 도우미</title>') {
+            Write-Host 'shared_edge_to_dahum=reachable title_match=true'
+        }
+        elseif ($exitCode -eq 0) {
+            Write-Host 'shared_edge_to_dahum=reachable title_match=false'
+        }
+        else {
+            Write-Host ('shared_edge_to_dahum=failed exit=' + $exitCode)
+        }
+    }
+    catch {
+        Write-Host ('shared_edge_to_dahum=failed error=' + $_.Exception.Message)
+    }
+}
+
 function Test-RootUrl {
     param([string]$Url)
 
@@ -89,6 +142,7 @@ function Test-RootUrl {
 $ports = @(80, 443, $HostPort) | Select-Object -Unique
 Show-TcpListeners -Ports $ports
 Show-DockerPublishedPorts
+Show-SharedEdgeProxy -DahumPort $HostPort
 
 Write-Host '--- Local root-route probes ---'
 Test-RootUrl -Url ("http://127.0.0.1:{0}/" -f $HostPort)

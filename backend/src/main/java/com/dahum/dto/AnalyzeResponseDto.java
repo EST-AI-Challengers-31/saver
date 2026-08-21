@@ -1,35 +1,19 @@
 package com.dahum.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
-public class AnalyzeResponseDto {
-
-    @JsonProperty("scan_id")
-    private String scanId;
-
-    private List<AnalyzeResultItemDto> results;
-
-    private String policy;
-
-    @JsonProperty("similarity_threshold")
-    private Double similarityThreshold;
-
-    @JsonProperty("vector_provider")
-    private String vectorProvider;
-
-    public AnalyzeResponseDto() {
-    }
-
-    public String getScanId() { return scanId; }
-    public void setScanId(String scanId) { this.scanId = scanId; }
-    public List<AnalyzeResultItemDto> getResults() { return results; }
-    public void setResults(List<AnalyzeResultItemDto> results) { this.results = results; }
-    public String getPolicy() { return policy; }
-    public void setPolicy(String policy) { this.policy = policy; }
-    public Double getSimilarityThreshold() { return similarityThreshold; }
-    public void setSimilarityThreshold(Double similarityThreshold) { this.similarityThreshold = similarityThreshold; }
-    public String getVectorProvider() { return vectorProvider; }
-    public void setVectorProvider(String vectorProvider) { this.vectorProvider = vectorProvider; }
+/**
+ * Python app.schemas.AnalyzeResponse 와 1:1로 맞춘 응답 DTO입니다.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record AnalyzeResponseDto(
+        @JsonProperty("scan_id") String scanId,
+        @JsonProperty("results") List<AnalyzeResultItemDto> results,
+        @JsonProperty("policy") String policy,
+        @JsonProperty("similarity_threshold") Double similarityThreshold,
+        @JsonProperty("vector_provider") String vectorProvider
+) {
 }

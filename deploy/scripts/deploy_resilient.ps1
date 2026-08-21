@@ -106,14 +106,16 @@ function Invoke-DockerBestEffort {
     }
 }
 
-function Get-DahumMariaDbContainerId {
+function Get-DahumServiceContainerId {
+    param([Parameter(Mandatory = $true)][string]$Service)
+
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         $ids = @(
             & docker ps `
                 --filter 'label=com.docker.compose.project=dahum' `
-                --filter 'label=com.docker.compose.service=mariadb' `
+                --filter "label=com.docker.compose.service=$Service" `
                 --format '{{.ID}}' `
                 2>$null
         )
@@ -135,6 +137,10 @@ function Get-DahumMariaDbContainerId {
             ForEach-Object { [string]$_ } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     ) | Select-Object -First 1
+}
+
+function Get-DahumMariaDbContainerId {
+    return Get-DahumServiceContainerId -Service 'mariadb'
 }
 
 function Test-MariaDbCredential {
@@ -245,29 +251,61 @@ function Initialize-DockerAuthConfig {
     return $dockerConfig
 }
 
-function Wait-WebHealth {
-    param(
-        [Parameter(Mandatory = $true)][int]$Port,
-        [int]$TimeoutSeconds = 240
-    )
+function Wait-DahumRootRoute {
+    param([int]$TimeoutSeconds = 120)
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $url = "http://127.0.0.1:$Port/"
+    $expectedMarker = '<div id="root"></div>'
 
     while ((Get-Date) -lt $deadline) {
+        $caddyContainerId = Get-DahumServiceContainerId -Service 'caddy'
+        if ([string]::IsNullOrWhiteSpace($caddyContainerId)) {
+            Start-Sleep -Seconds 3
+            continue
+        }
+
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 5
-            if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-                Write-Host "Web health passed: $url"
-                return
-            }
+            $content = (& docker exec $caddyContainerId wget -q -T 5 -O - 'http://127.0.0.1/' 2>$null | Out-String)
+            $exitCode = $LASTEXITCODE
         }
         catch {
-            Start-Sleep -Seconds 4
+            $content = ''
+            $exitCode = 1
         }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        if ($exitCode -eq 0 -and $content.Contains($expectedMarker)) {
+            Write-Host 'Dahum root route passed inside the Caddy container.'
+            return
+        }
+
+        Start-Sleep -Seconds 3
     }
 
-    throw "Web health check timed out: $url"
+    throw 'Dahum root route did not become ready inside the Caddy container.'
+}
+
+function Test-HostPublishedRootRoute {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    $url = "http://127.0.0.1:$Port/"
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 8
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
+            Write-Host "Host published root route is reachable: $url"
+            return
+        }
+    }
+    catch {
+        Write-Warning "Host loopback check could not reach $url. Container route is valid; the external GitHub Actions route check will be authoritative."
+        return
+    }
+
+    Write-Warning "Host loopback check returned an unexpected response for $url. External route verification will decide deployment success."
 }
 
 function Show-DahumDiagnostics {
@@ -357,13 +395,19 @@ try {
         -FailureMessage 'Docker Compose configuration validation failed.' `
         -Quiet
 
+    # SSH 비대화형 세션의 Windows credential helper를 거치지 않도록 임시 Docker config를 사용한다.
     Invoke-DockerBestEffort `
-        -Arguments @('compose', '-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
+        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
         -WarningMessage 'Public MariaDB/Caddy image refresh failed; existing local images will be used if available.'
 
     Invoke-DockerChecked `
-        -Arguments @('compose', '-f', $ComposePath, 'up', '-d', '--remove-orphans') `
+        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'up', '-d', '--remove-orphans') `
         -FailureMessage 'Docker Compose up failed.'
+
+    # Backend가 교체될 때 Caddy가 현재 Docker DNS 대상을 다시 잡도록 게이트웨이만 재생성한다.
+    Invoke-DockerChecked `
+        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'up', '-d', '--no-deps', '--force-recreate', 'caddy') `
+        -FailureMessage 'Caddy gateway refresh failed.'
 
     # Compose가 새 MariaDB를 띄운 뒤 실제 앱 계정으로 한 번 더 검증한다.
     $mariaDbContainerId = Get-DahumMariaDbContainerId
@@ -376,8 +420,12 @@ try {
     }
     Write-Host 'MariaDB application credential verified.'
 
+    # /health 엔드포인트를 사용하지 않는다. 실제 React 진입 HTML을 Caddy 내부에서 확인한다.
+    Wait-DahumRootRoute -TimeoutSeconds 120
+
+    # Windows Docker Desktop의 localhost 포트 전달은 SSH 세션에서 간헐적으로 실패할 수 있으므로 참고용으로만 확인한다.
     $hostPort = [int]$env:DAHUM_HOST_PORT
-    Wait-WebHealth -Port $hostPort -TimeoutSeconds 240
+    Test-HostPublishedRootRoute -Port $hostPort
 
     Write-Host 'Python-first Dahum deployment completed.'
 }

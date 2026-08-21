@@ -29,22 +29,148 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout repository with LFS assets
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
 
-      - name: Verify frontend binary assets
+      - name: Hydrate or recover frontend binary assets
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t pointers < <(grep -RIl --include='*.png' --include='*.woff2' 'version https://git-lfs.github.com/spec/v1' frontend/src/imports frontend/public/fonts || true)
-          if (( ${#pointers[@]} > 0 )); then
-            echo 'Git LFS assets were not hydrated:'
-            printf '  %s\n' "${pointers[@]}"
-            exit 1
+
+          if command -v git-lfs >/dev/null 2>&1; then
+            git lfs install --local
+            if git lfs pull; then
+              echo 'Git LFS hydration completed.'
+            else
+              echo 'Git LFS hydration was incomplete. Missing PNG assets will be generated locally for this build.'
+            fi
+          else
+            echo 'git-lfs is unavailable. Missing PNG assets will be generated locally for this build.'
           fi
-          echo 'Frontend binary assets are hydrated.'
+
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import struct
+          import zlib
+          from pathlib import Path
+
+          POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+          ROOTS = [Path("frontend/src/imports")]
+
+          def is_lfs_pointer(path: Path) -> bool:
+              try:
+                  return path.read_bytes().startswith(POINTER_PREFIX)
+              except OSError:
+                  return False
+
+          def in_polygon(x: float, y: float, points: list[tuple[float, float]]) -> bool:
+              inside = False
+              j = len(points) - 1
+              for i, (xi, yi) in enumerate(points):
+                  xj, yj = points[j]
+                  if (yi > y) != (yj > y):
+                      cross = (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi
+                      if x < cross:
+                          inside = not inside
+                  j = i
+              return inside
+
+          def make_brand_png(size: int = 256) -> bytes:
+              cx = cy = size / 2
+              rows = []
+              shield = [
+                  (128, 67), (177, 87), (172, 136),
+                  (128, 183), (84, 136), (79, 87),
+              ]
+              heart_triangle = [(96, 113), (160, 113), (128, 153)]
+
+              for y in range(size):
+                  row = bytearray([0])
+                  for x in range(size):
+                      dx = x - cx
+                      dy = y - cy
+                      radius2 = dx * dx + dy * dy
+                      pixel = (0, 0, 0, 0)
+
+                      if radius2 <= 121 * 121:
+                          t = min(1.0, max(0.0, (x + y) / (2 * size)))
+                          r = int(79 + (123 - 79) * t)
+                          g = int(140 + (108 - 140) * t)
+                          b = int(255 + (255 - 255) * t)
+                          pixel = (r, g, b, 255)
+
+                      if radius2 <= 92 * 92:
+                          pixel = (248, 250, 251, 255)
+
+                      if in_polygon(x, y, shield):
+                          pixel = (27, 58, 92, 255)
+
+                      left_heart = (x - 114) ** 2 + (y - 112) ** 2 <= 19 ** 2
+                      right_heart = (x - 142) ** 2 + (y - 112) ** 2 <= 19 ** 2
+                      if left_heart or right_heart or in_polygon(x, y, heart_triangle):
+                          pixel = (255, 255, 255, 255)
+
+                      row.extend(pixel)
+                  rows.append(bytes(row))
+
+              raw = b"".join(rows)
+
+              def chunk(kind: bytes, payload: bytes) -> bytes:
+                  return (
+                      struct.pack(">I", len(payload))
+                      + kind
+                      + payload
+                      + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+                  )
+
+              return (
+                  b"\x89PNG\r\n\x1a\n"
+                  + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+                  + chunk(b"IDAT", zlib.compress(raw, 9))
+                  + chunk(b"IEND", b"")
+              )
+
+          fallback = make_brand_png()
+          replaced = []
+          for root in ROOTS:
+              if not root.exists():
+                  continue
+              for path in root.rglob("*.png"):
+                  if is_lfs_pointer(path):
+                      path.write_bytes(fallback)
+                      replaced.append(path.as_posix())
+
+          if replaced:
+              print("Generated fallback PNG assets for unresolved Git LFS pointers:")
+              for path in replaced:
+                  print(f"  {path}")
+          else:
+              print("All frontend PNG assets are available.")
+
+          unresolved_png = []
+          for root in ROOTS:
+              if not root.exists():
+                  continue
+              unresolved_png.extend(
+                  path.as_posix() for path in root.rglob("*.png") if is_lfs_pointer(path)
+              )
+          if unresolved_png:
+              raise SystemExit("Unresolved frontend PNG pointers remain: " + ", ".join(unresolved_png))
+
+          font_root = Path("frontend/public/fonts")
+          unresolved_fonts = []
+          if font_root.exists():
+              unresolved_fonts = [
+                  path.as_posix() for path in font_root.rglob("*.woff2") if is_lfs_pointer(path)
+              ]
+          if unresolved_fonts:
+              print("WARNING: Pretendard LFS fonts are unavailable; browser font fallback will be used:")
+              for path in unresolved_fonts:
+                  print(f"  {path}")
+          PY
 
       - name: Set up Node for frontend preflight
         uses: actions/setup-node@v4

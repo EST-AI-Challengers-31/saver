@@ -1,27 +1,27 @@
-name: dahum
-
+name: dahum-local
 services:
   mariadb:
-    image: ${MARIADB_IMAGE:-mariadb:11.4}
+    image: mariadb:11.4
     restart: unless-stopped
     environment:
       MARIADB_DATABASE: ${MARIADB_DATABASE:-dahum}
       MARIADB_USER: ${MARIADB_USER:-dahum_app}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+    ports: ["3307:3306"]
     volumes:
-      - ${DAHUM_RUNTIME}/data/mariadb:/var/lib/mysql
-      - ../db/init:/docker-entrypoint-initdb.d:ro
+      - ./runtime/local-mariadb:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 18
+      retries: 30
       start_period: 20s
-    networks: [dahum_internal]
-
   ai:
-    image: ${AI_IMAGE:?AI_IMAGE is required}
+    build:
+      context: .
+      dockerfile: ai/Dockerfile
     restart: unless-stopped
     depends_on:
       mariadb:
@@ -41,17 +41,19 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
       MALWARE_DATA_DIR: /app/data
-    expose: ["8000"]
+    ports: ["8000:8000"]
+    volumes:
+      - ./datas/data:/app/data:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 18
+      retries: 30
       start_period: 20s
-    networks: [dahum_internal]
-
   backend:
-    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       mariadb:
@@ -59,30 +61,13 @@ services:
       ai:
         condition: service_healthy
     environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mariadb://mariadb:3306/dahum}
-      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-dahum_app}
-      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
-      AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://yellow.it.kr}
-      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-framework}
+      SPRING_PROFILES_ACTIVE: local
+      SPRING_DATASOURCE_URL: jdbc:mariadb://mariadb:3306/${MARIADB_DATABASE:-dahum}
+      SPRING_DATASOURCE_USERNAME: ${MARIADB_USER:-dahum_app}
+      SPRING_DATASOURCE_PASSWORD: ${MARIADB_PASSWORD}
+      AI_BASE_URL: http://ai:8000
+      PUBLIC_BASE_URL: http://localhost:8080
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
       CLOVA_OCR_URL: ${CLOVA_OCR_URL:-}
       CLOVA_OCR_SECRET: ${CLOVA_OCR_SECRET:-}
-      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
-      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
-    expose: ["8080"]
-    networks: [dahum_internal, dahum_web]
-
-  caddy:
-    image: caddy:2.10-alpine
-    restart: unless-stopped
-    depends_on: [backend]
-    ports:
-      - "${DAHUM_HOST_PORT:-9000}:80"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-    networks: [dahum_web]
-
-networks:
-  dahum_internal:
-  dahum_web:
+    ports: ["8080:8080"]

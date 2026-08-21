@@ -1,6 +1,3 @@
 $ErrorActionPreference = 'Stop'
-$DahumHome = if ($env:DAHUM_HOME) { $env:DAHUM_HOME } else { 'C:\home\dahum' }
-$EnvPath = Join-Path $DahumHome 'runtime\.env'
-$ComposePath = Join-Path $DahumHome 'app\deploy\docker-compose.yml'
-
-docker compose --env-file $EnvPath -f $ComposePath ps
+# 운영 설정은 GitHub Actions가 프로세스 환경변수로 전달하므로 runtime .env를 읽지 않는다.
+docker ps --filter 'label=com.docker.compose.project=dahum' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'

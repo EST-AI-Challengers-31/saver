@@ -1,0 +1,14 @@
+.git
+.github
+**/.gradle
+**/build
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+runtime
+.dahum_patch_backup
+*.log
+*.tmp
+!datas/data/malware_db.csv
+!datas/data/malware_embedding_data.csv

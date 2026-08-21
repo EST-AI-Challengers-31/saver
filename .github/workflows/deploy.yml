@@ -325,7 +325,7 @@ jobs:
       - name: Verify public yellow.it.kr route
         shell: bash
         env:
-          PUBLIC_URL: https://yellow.it.kr/
+          PUBLIC_URL: http://yellow.it.kr/
         run: |
           set -u
           rm -f /tmp/dahum-public.html

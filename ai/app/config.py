@@ -49,9 +49,13 @@ class Settings:
     mariadb_user: str = os.getenv("MARIADB_USER", "dahum_app")
     mariadb_password: str = env_value("MARIADB_PASSWORD")
 
-    # LLM은 공급자 endpoint가 명확할 때만 호출한다. 없으면 템플릿 fallback.
+    # 현재 Python-first LLM 경로. endpoint가 없으면 템플릿 fallback을 사용한다.
     llm_api_key: str = env_value("LLM_API_KEY")
     llm_api_base_url: str = env_value("LLM_API_BASE_URL")
+
+    # 기존 저장소/Secrets와의 호환을 위해 Alan Client ID도 전달받는다.
+    # 현재 위험도 판정 로직의 필수값은 아니며, 설정되지 않아도 배포를 막지 않는다.
+    alan_client_id: str = env_value("ALAN_CLIENT_ID")
 
     # Vector 검색
     vector_provider: str = os.getenv("VECTOR_PROVIDER", "local").strip().lower()

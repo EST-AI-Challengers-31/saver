@@ -30,6 +30,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Resolve GHCR image names
         id: images
         shell: bash
@@ -38,25 +39,31 @@ jobs:
           repo_lower="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           echo "backend=ghcr.io/${repo_lower}-backend" >> "$GITHUB_OUTPUT"
           echo "ai=ghcr.io/${repo_lower}-ai" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
           push: true
+          build-args: |
+            VITE_KAKAO_CLIENT_ID=${{ secrets.VITE_KAKAO_CLIENT_ID }}
           tags: |
             ${{ steps.images.outputs.backend }}:${{ github.sha }}
             ${{ steps.images.outputs.backend }}:latest
           cache-from: type=gha,scope=dahum-backend
           cache-to: type=gha,mode=max,scope=dahum-backend
+
       - name: Build and push Python AI image
         uses: docker/build-push-action@v6
         with:
@@ -68,6 +75,7 @@ jobs:
             ${{ steps.images.outputs.ai }}:latest
           cache-from: type=gha,scope=dahum-ai
           cache-to: type=gha,mode=max,scope=dahum-ai
+
       - name: Build runtime configuration
         id: runtime_config
         shell: bash
@@ -90,25 +98,28 @@ jobs:
           KAKAO_CLIENT_ID: ${{ secrets.KAKAOCLIENTID }}
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAOCLIENTSECRET }}
           CLOVA_OCR_URL: ${{ vars.CLOVAOCRURL || vars.CLOVA_OCR_URL || '' }}
-          CLOVA_OCR_SECRET: ${{ secrets.CLOVAOCRSECRET || secrets.CLOVA_OCR_SECRET || '' }}
+          CLOVA_OCR_SECRET: ${{ secrets.CLOVA_OCR_SECRET || secrets.CLOVAOCRSECRET || '' }}
           VECTOR_PROVIDER: ${{ vars.VECTORPROVIDER || vars.VECTOR_PROVIDER || 'local' }}
           RAG_SIMILARITY_THRESHOLD: ${{ vars.RAGSIMILARITYTHRESHOLD || vars.RAG_SIMILARITY_THRESHOLD || '0.80' }}
           RAG_TOP_K: ${{ vars.RAGTOPK || vars.RAG_TOP_K || '5' }}
-          PINECONE_API_KEY: ${{ secrets.PINECONEAPIKEY || secrets.PINECONE_API_KEY || '' }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY || secrets.PINECONEAPIKEY || '' }}
           PINECONE_INDEX: ${{ vars.PINECONEINDEX || vars.PINECONE_INDEX || 'dahum-malware' }}
-          UPSTAGE_API_KEY: ${{ secrets.UPSTAGEAPIKEY || secrets.UPSTAGE_API_KEY || '' }}
+          UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY || secrets.UPSTAGEAPIKEY || '' }}
           LLM_API_KEY: ${{ secrets.LLMAPIKEY }}
           LLM_API_BASE_URL: ${{ vars.LLMAPIBASEURL || vars.LLM_API_BASE_URL || '' }}
+          ALAN_CLIENT_ID: ${{ secrets.ALAN_CLIENT_ID }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import base64, json, os
-          keys = ["MARIADB_IMAGE","MARIADB_DATABASE","MARIADB_USER","MARIADB_PASSWORD","MARIADB_ROOT_PASSWORD","SPRING_PROFILES_ACTIVE","SPRING_DATASOURCE_URL","SPRING_DATASOURCE_USERNAME","SPRING_DATASOURCE_PASSWORD","SERVER_FORWARD_HEADERS_STRATEGY","AI_BASE_URL","DAHUM_RUNTIME","DAHUM_HOST_PORT","PUBLIC_DOMAIN","PUBLIC_BASE_URL","KAKAO_CLIENT_ID","KAKAO_CLIENT_SECRET","CLOVA_OCR_URL","CLOVA_OCR_SECRET","VECTOR_PROVIDER","RAG_SIMILARITY_THRESHOLD","RAG_TOP_K","PINECONE_API_KEY","PINECONE_INDEX","UPSTAGE_API_KEY","LLM_API_KEY","LLM_API_BASE_URL"]
+          keys = ["MARIADB_IMAGE","MARIADB_DATABASE","MARIADB_USER","MARIADB_PASSWORD","MARIADB_ROOT_PASSWORD","SPRING_PROFILES_ACTIVE","SPRING_DATASOURCE_URL","SPRING_DATASOURCE_USERNAME","SPRING_DATASOURCE_PASSWORD","SERVER_FORWARD_HEADERS_STRATEGY","AI_BASE_URL","DAHUM_RUNTIME","DAHUM_HOST_PORT","PUBLIC_DOMAIN","PUBLIC_BASE_URL","KAKAO_CLIENT_ID","KAKAO_CLIENT_SECRET","CLOVA_OCR_URL","CLOVA_OCR_SECRET","VECTOR_PROVIDER","RAG_SIMILARITY_THRESHOLD","RAG_TOP_K","PINECONE_API_KEY","PINECONE_INDEX","UPSTAGE_API_KEY","LLM_API_KEY","LLM_API_BASE_URL","ALAN_CLIENT_ID"]
           config = {key: os.environ.get(key, "") for key in keys}
           encoded = base64.b64encode(json.dumps(config, ensure_ascii=False, separators=(",", ":")).encode()).decode()
           print(f"::add-mask::{encoded}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output: output.write(f"config={encoded}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"config={encoded}\n")
           PY
+
       - name: Deploy exact images to Windows mini PC
         uses: appleboy/ssh-action@v1.2.2
         with:

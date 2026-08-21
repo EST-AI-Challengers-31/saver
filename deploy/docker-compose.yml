@@ -40,6 +40,7 @@ services:
       UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
+      ALAN_CLIENT_ID: ${ALAN_CLIENT_ID:-}
       MALWARE_DATA_DIR: /app/data
     expose: ["8000"]
     networks: [dahum_internal]

@@ -13,6 +13,7 @@ on:
       - "deploy/**"
       - ".github/workflows/deploy.yml"
       - ".dockerignore"
+      - ".gitattributes"
   workflow_dispatch:
 
 concurrency:
@@ -26,10 +27,58 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
-      - name: Checkout repository
+      - name: Checkout repository with LFS assets
         uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify frontend binary assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pointers < <(grep -RIl --include='*.png' --include='*.woff2' 'version https://git-lfs.github.com/spec/v1' frontend/src/imports frontend/public/fonts || true)
+          if (( ${#pointers[@]} > 0 )); then
+            echo 'Git LFS assets were not hydrated:'
+            printf '  %s\n' "${pointers[@]}"
+            exit 1
+          fi
+          echo 'Frontend binary assets are hydrated.'
+
+      - name: Set up Node for frontend preflight
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend preflight build
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle 8.10
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10'
+
+      - name: Backend preflight build
+        shell: bash
+        run: gradle -p backend clean bootJar --no-daemon
+
+      - name: Python syntax preflight
+        shell: bash
+        run: python3 -m compileall -q ai/app
 
       - name: Resolve GHCR image names
         id: images
@@ -139,7 +188,7 @@ jobs:
         run: |
           set -u
           rm -f /tmp/dahum-public.html
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 36); do
             code="$(curl -L -sS -o /tmp/dahum-public.html -w '%{http_code}' --connect-timeout 5 --max-time 12 "$PUBLIC_URL" || true)"
             if [[ "$code" =~ ^2[0-9][0-9]$ ]] && grep -Fq '<title>닿음 | 가족 보안 도우미</title>' /tmp/dahum-public.html; then
               echo "Public Dahum route verified: $PUBLIC_URL (HTTP $code)"
@@ -150,7 +199,7 @@ jobs:
           done
           echo "Public route verification failed: $PUBLIC_URL"
           if [[ -f /tmp/dahum-public.html ]]; then
-            head -c 600 /tmp/dahum-public.html || true
+            head -c 800 /tmp/dahum-public.html || true
             echo
           fi
           exit 1

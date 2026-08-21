@@ -10,9 +10,9 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
     volumes:
-      # 기존 잘못된 credential로 초기화된 DB 데이터는 삭제하지 않고 보존한다.
-      # Python-first 운영 DB는 새 경로에서 현재 GitHub Secrets로 다시 초기화한다.
-      - ${DAHUM_RUNTIME}/data/mariadb-python-first-v2:/var/lib/mysql
+      # v1/v2 데이터는 삭제하지 않고 보존한다.
+      # v3는 현재 GitHub Actions Secrets로 새로 초기화해 과거 DB 비밀번호가 운영 설정을 덮어쓰지 않게 한다.
+      - ${DAHUM_RUNTIME}/data/mariadb-python-first-v3:/var/lib/mysql
       - ../db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]

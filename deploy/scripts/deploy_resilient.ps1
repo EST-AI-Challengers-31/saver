@@ -70,6 +70,9 @@ function Invoke-DockerChecked {
         }
         $exitCode = $LASTEXITCODE
     }
+    catch {
+        $exitCode = 1
+    }
     finally {
         $ErrorActionPreference = $previousPreference
     }
@@ -103,65 +106,35 @@ function Invoke-DockerBestEffort {
     }
 }
 
-function Get-DockerOutput {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
-
+function Get-DahumMariaDbContainerId {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = @(& docker @Arguments 2>$null)
+        $ids = @(
+            & docker ps `
+                --filter 'label=com.docker.compose.project=dahum' `
+                --filter 'label=com.docker.compose.service=mariadb' `
+                --format '{{.ID}}' `
+                2>$null
+        )
         $exitCode = $LASTEXITCODE
     }
     catch {
-        return @()
+        return $null
     }
     finally {
         $ErrorActionPreference = $previousPreference
     }
 
     if ($exitCode -ne 0) {
-        return @()
+        return $null
     }
-
-    return @($output)
-}
-
-function Get-DahumMariaDbContainerId {
-    $ids = Get-DockerOutput -Arguments @(
-        'ps',
-        '--filter', 'label=com.docker.compose.project=dahum',
-        '--filter', 'label=com.docker.compose.service=mariadb',
-        '--format', '{{.ID}}'
-    )
 
     return @(
         $ids |
             ForEach-Object { [string]$_ } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     ) | Select-Object -First 1
-}
-
-function Get-ContainerEnvValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$ContainerId,
-        [Parameter(Mandatory = $true)][string]$Name
-    )
-
-    $lines = Get-DockerOutput -Arguments @(
-        'inspect',
-        '--format', '{{range .Config.Env}}{{println .}}{{end}}',
-        $ContainerId
-    )
-
-    $prefix = "$Name="
-    foreach ($line in $lines) {
-        $text = [string]$line
-        if ($text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-            return $text.Substring($prefix.Length)
-        }
-    }
-
-    return $null
 }
 
 function Test-MariaDbCredential {
@@ -173,6 +146,7 @@ function Test-MariaDbCredential {
     )
 
     if (
+        [string]::IsNullOrWhiteSpace($ContainerId) -or
         [string]::IsNullOrWhiteSpace($Database) -or
         [string]::IsNullOrWhiteSpace($User) -or
         [string]::IsNullOrWhiteSpace($Password)
@@ -202,52 +176,32 @@ function Test-MariaDbCredential {
     }
 }
 
-function Resolve-MariaDbRuntimeCredential {
+function Try-MariaDbBackup {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupScript,
+        [Parameter(Mandatory = $true)][string]$RuntimePath
+    )
+
+    if (-not (Test-Path -LiteralPath $BackupScript)) {
+        Write-Host 'MariaDB backup script is not present; backup skipped.'
+        return
+    }
+
     $containerId = Get-DahumMariaDbContainerId
     if ([string]::IsNullOrWhiteSpace($containerId)) {
-        Write-Host 'No existing MariaDB container found; current GitHub runtime credentials will initialize it.'
+        Write-Host 'MariaDB is not running yet; backup skipped.'
         return
     }
 
-    $runtimeDatabase = $env:MARIADB_DATABASE
-    $runtimeUser = $env:MARIADB_USER
-    $runtimePassword = $env:MARIADB_PASSWORD
-
-    if (Test-MariaDbCredential `
-            -ContainerId $containerId `
-            -Database $runtimeDatabase `
-            -User $runtimeUser `
-            -Password $runtimePassword) {
-        Write-Host 'GitHub runtime MariaDB credential is already valid.'
-        return
+    try {
+        # backup_mariadb.ps1가 기존 컨테이너 자격증명과 현재 RuntimeConfig를 각각 검증한다.
+        # 기존 DB 자격증명은 백업에만 사용하고 새 운영 RuntimeConfig를 덮어쓰지 않는다.
+        & $BackupScript -RuntimePath $RuntimePath
+        Write-Host 'MariaDB backup step completed.'
     }
-
-    $existingDatabase = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_DATABASE'
-    $existingUser = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_USER'
-    $existingPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_PASSWORD'
-    $existingRootPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_ROOT_PASSWORD'
-
-    if (Test-MariaDbCredential `
-            -ContainerId $containerId `
-            -Database $existingDatabase `
-            -User $existingUser `
-            -Password $existingPassword) {
-        $env:MARIADB_DATABASE = $existingDatabase
-        $env:MARIADB_USER = $existingUser
-        $env:MARIADB_PASSWORD = $existingPassword
-        $env:SPRING_DATASOURCE_URL = "jdbc:mariadb://mariadb:3306/$existingDatabase"
-        $env:SPRING_DATASOURCE_USERNAME = $existingUser
-        $env:SPRING_DATASOURCE_PASSWORD = $existingPassword
-
-        if (-not [string]::IsNullOrWhiteSpace($existingRootPassword)) {
-            $env:MARIADB_ROOT_PASSWORD = $existingRootPassword
-        }
-
-        Write-Host 'Existing persisted MariaDB credential was verified and adopted for this deployment.'
-        return
+    catch {
+        Write-Warning ('MariaDB backup failed but deployment will continue without deleting or modifying existing DB data: ' + $_.Exception.Message)
     }
-
-    Write-Warning 'MariaDB application credentials could not be verified. Existing database data will not be deleted or modified. Backup will be skipped and deployment will continue so the web/AI path can recover independently.'
 }
 
 function Initialize-DockerAuthConfig {
@@ -291,45 +245,10 @@ function Initialize-DockerAuthConfig {
     return $dockerConfig
 }
 
-function Try-MariaDbBackup {
-    param(
-        [Parameter(Mandatory = $true)][string]$BackupScript,
-        [Parameter(Mandatory = $true)][string]$RuntimePath
-    )
-
-    if (-not (Test-Path -LiteralPath $BackupScript)) {
-        Write-Host 'MariaDB backup script is not present; backup skipped.'
-        return
-    }
-
-    $containerId = Get-DahumMariaDbContainerId
-    if ([string]::IsNullOrWhiteSpace($containerId)) {
-        Write-Host 'MariaDB is not running yet; backup skipped.'
-        return
-    }
-
-    if (-not (Test-MariaDbCredential `
-            -ContainerId $containerId `
-            -Database $env:MARIADB_DATABASE `
-            -User $env:MARIADB_USER `
-            -Password $env:MARIADB_PASSWORD)) {
-        Write-Warning 'MariaDB backup skipped because no verified application credential is available. Existing data remains untouched.'
-        return
-    }
-
-    try {
-        & $BackupScript -RuntimePath $RuntimePath
-        Write-Host 'MariaDB backup step completed.'
-    }
-    catch {
-        Write-Warning ('MariaDB backup failed but deployment will continue without changing existing DB data: ' + $_.Exception.Message)
-    }
-}
-
 function Wait-WebHealth {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
-        [int]$TimeoutSeconds = 180
+        [int]$TimeoutSeconds = 240
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -361,8 +280,8 @@ function Show-DahumDiagnostics {
         & docker version 2>&1 | Select-Object -First 40 | ForEach-Object { Write-Host $_ }
         & docker compose version 2>&1 | ForEach-Object { Write-Host $_ }
         & docker compose -f $ComposePath ps 2>&1 | ForEach-Object { Write-Host $_ }
-        Write-Host '--- Recent container logs ---'
-        & docker compose -f $ComposePath logs --tail 120 backend ai mariadb caddy 2>&1 | ForEach-Object { Write-Host $_ }
+        Write-Host '--- Recent Dahum container logs ---'
+        & docker compose -f $ComposePath logs --tail 160 backend ai mariadb caddy 2>&1 | ForEach-Object { Write-Host $_ }
     }
     catch {
         Write-Host ('Diagnostics could not be completed: ' + $_.Exception.Message)
@@ -415,7 +334,7 @@ try {
     Invoke-DockerChecked -Arguments @('compose', 'version') -FailureMessage 'Docker Compose plugin is not available.' -Quiet
     Write-Host 'Docker Compose mode: docker compose plugin'
 
-    Resolve-MariaDbRuntimeCredential
+    # 기존 DB는 먼저 백업하되, 운영 서비스 비밀번호는 GitHub RuntimeConfig 값을 그대로 유지한다.
     Try-MariaDbBackup -BackupScript $BackupPath -RuntimePath $RuntimePath
 
     $DockerConfigPath = Initialize-DockerAuthConfig `
@@ -438,8 +357,6 @@ try {
         -FailureMessage 'Docker Compose configuration validation failed.' `
         -Quiet
 
-    # MariaDB/Caddy 이미지는 이미 서버에 있으면 그대로 사용한다.
-    # 공개 레지스트리 일시 장애가 private image 배포까지 막지 않게 pull은 best-effort로 둔다.
     Invoke-DockerBestEffort `
         -Arguments @('compose', '-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
         -WarningMessage 'Public MariaDB/Caddy image refresh failed; existing local images will be used if available.'
@@ -448,8 +365,19 @@ try {
         -Arguments @('compose', '-f', $ComposePath, 'up', '-d', '--remove-orphans') `
         -FailureMessage 'Docker Compose up failed.'
 
+    # Compose가 새 MariaDB를 띄운 뒤 실제 앱 계정으로 한 번 더 검증한다.
+    $mariaDbContainerId = Get-DahumMariaDbContainerId
+    if (-not (Test-MariaDbCredential `
+            -ContainerId $mariaDbContainerId `
+            -Database $env:MARIADB_DATABASE `
+            -User $env:MARIADB_USER `
+            -Password $env:MARIADB_PASSWORD)) {
+        throw 'MariaDB application credential verification failed after Compose startup.'
+    }
+    Write-Host 'MariaDB application credential verified.'
+
     $hostPort = [int]$env:DAHUM_HOST_PORT
-    Wait-WebHealth -Port $hostPort -TimeoutSeconds 180
+    Wait-WebHealth -Port $hostPort -TimeoutSeconds 240
 
     Write-Host 'Python-first Dahum deployment completed.'
 }

@@ -1,5 +1,6 @@
 # Stage 1: build the React mobile web UI.
-FROM node:20-alpine AS frontend-build
+# Vite 8 requires Node >= 20.19. Pin the minor version so a cached older Node 20 image cannot break the build.
+FROM node:20.19-alpine AS frontend-build
 WORKDIR /workspace/frontend
 COPY frontend/package*.json ./
 RUN npm ci --no-audit --no-fund

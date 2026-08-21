@@ -51,8 +51,10 @@ function Show-TcpListeners {
     catch {
         Write-Warning ('Get-NetTCPConnection failed: ' + $_.Exception.Message)
         Write-Host 'Fallback netstat output:'
+        $patterns = @($uniquePorts | ForEach-Object { ':' + $_ + '\s' })
+        $pattern = [string]::Join('|', $patterns)
         & netstat -ano -p tcp |
-            Select-String -Pattern ($uniquePorts | ForEach-Object { ':' + $_ + '\s' } | Join-String -Separator '|') |
+            Select-String -Pattern $pattern |
             ForEach-Object { Write-Host $_.Line }
     }
 }

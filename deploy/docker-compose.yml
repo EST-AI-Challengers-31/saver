@@ -76,6 +76,7 @@ services:
     depends_on: [backend]
     ports:
       - "${DAHUM_HOST_PORT:-9000}:80"
+      - "${DAHUM_PUBLIC_HTTP_PORT:-80}:80"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     networks: [dahum_web]

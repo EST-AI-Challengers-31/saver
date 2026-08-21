@@ -184,6 +184,146 @@ function Get-ComposeRunningServices {
     return @($output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
+function Get-DahumMariaDbContainerId {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $ids = @(
+            & docker ps `
+                --filter 'label=com.docker.compose.project=dahum' `
+                --filter 'label=com.docker.compose.service=mariadb' `
+                --format '{{.ID}}' `
+                2>$null
+        )
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        return $null
+    }
+
+    return @(
+        $ids |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    ) | Select-Object -First 1
+}
+
+function Get-ContainerEnvValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$ContainerId,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = @(
+            & docker inspect `
+                --format '{{range .Config.Env}}{{println .}}{{end}}' `
+                $ContainerId `
+                2>$null
+        )
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        return $null
+    }
+
+    $prefix = "$Name="
+    foreach ($line in $lines) {
+        $text = [string]$line
+        if ($text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            return $text.Substring($prefix.Length)
+        }
+    }
+
+    return $null
+}
+
+function Test-MariaDbCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$ContainerId,
+        [Parameter(Mandatory = $true)][string]$Database,
+        [Parameter(Mandatory = $true)][string]$User,
+        [Parameter(Mandatory = $true)][string]$Password
+    )
+
+    if (
+        [string]::IsNullOrWhiteSpace($Database) -or
+        [string]::IsNullOrWhiteSpace($User) -or
+        [string]::IsNullOrWhiteSpace($Password)
+    ) {
+        return $false
+    }
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker exec `
+            -e "MYSQL_PWD=$Password" `
+            $ContainerId `
+            mariadb `
+            "-u$User" `
+            $Database `
+            '-e' `
+            'SELECT 1;' `
+            *> $null
+        return ($LASTEXITCODE -eq 0)
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+function Adopt-ExistingMariaDbCredential {
+    $containerId = Get-DahumMariaDbContainerId
+    if ([string]::IsNullOrWhiteSpace($containerId)) {
+        Write-Host 'No existing MariaDB container found; GitHub runtime credentials will initialize the DB.'
+        return
+    }
+
+    $existingDatabase = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_DATABASE'
+    $existingUser = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_USER'
+    $existingPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_PASSWORD'
+    $existingRootPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_ROOT_PASSWORD'
+
+    if (-not (Test-MariaDbCredential `
+            -ContainerId $containerId `
+            -Database $existingDatabase `
+            -User $existingUser `
+            -Password $existingPassword)) {
+        Write-Host 'Existing MariaDB container credentials are not valid; keeping GitHub runtime credentials.'
+        return
+    }
+
+    # MariaDB entrypoint 비밀번호는 기존 volume이 있을 때 자동 갱신되지 않는다.
+    # 기존 DB가 실제로 사용하는 검증된 자격증명을 이번 배포 프로세스에 채택해
+    # Backend/AI와 DB의 비밀번호 불일치를 방지한다. 값 자체는 로그에 출력하지 않는다.
+    $env:MARIADB_DATABASE = $existingDatabase
+    $env:MARIADB_USER = $existingUser
+    $env:MARIADB_PASSWORD = $existingPassword
+    $env:SPRING_DATASOURCE_URL = "jdbc:mariadb://mariadb:3306/$existingDatabase"
+    $env:SPRING_DATASOURCE_USERNAME = $existingUser
+    $env:SPRING_DATASOURCE_PASSWORD = $existingPassword
+
+    if (-not [string]::IsNullOrWhiteSpace($existingRootPassword)) {
+        $env:MARIADB_ROOT_PASSWORD = $existingRootPassword
+    }
+
+    Write-Host 'Existing MariaDB credentials verified and adopted for this deployment.'
+}
+
 function Initialize-DockerAuthConfig {
     param(
         [string]$ProjectRoot,
@@ -340,6 +480,10 @@ try {
 
     $ComposeMode = Resolve-ComposeMode
 
+    # 기존 MariaDB volume은 새 Actions Secret으로 비밀번호가 자동 변경되지 않는다.
+    # 현재 DB에 실제로 로그인되는 기존 자격증명을 먼저 채택해 서비스 연결을 복구한다.
+    Adopt-ExistingMariaDbCredential
+
     $DockerConfigPath = Initialize-DockerAuthConfig `
         -ProjectRoot $AppPath `
         -User $RegistryUser `
@@ -372,8 +516,6 @@ try {
         -Arguments @('-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
         -FailureMessage 'Could not pull public MariaDB/Caddy images.'
 
-    # Backend/AI의 정확한 SHA 이미지가 이미 로컬 Docker daemon에 있으므로
-    # legacy Compose에서도 호환되도록 up 단계의 --pull 옵션은 사용하지 않는다.
     Invoke-ComposeChecked `
         -Mode $ComposeMode `
         -Arguments @('-f', $ComposePath, 'up', '-d', '--remove-orphans') `

@@ -395,18 +395,20 @@ try {
         -FailureMessage 'Docker Compose configuration validation failed.' `
         -Quiet
 
-    # SSH 비대화형 세션의 Windows credential helper를 거치지 않도록 임시 Docker config를 사용한다.
+    # Public images are optional refreshes. If the Windows SSH session cannot use the desktop credential helper,
+    # deployment continues with the already available MariaDB/Caddy images.
     Invoke-DockerBestEffort `
-        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
+        -Arguments @('compose', '-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
         -WarningMessage 'Public MariaDB/Caddy image refresh failed; existing local images will be used if available.'
 
+    # Private backend/AI images were pulled explicitly above, so Compose can use the local exact-SHA images.
     Invoke-DockerChecked `
-        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'up', '-d', '--remove-orphans') `
+        -Arguments @('compose', '-f', $ComposePath, 'up', '-d', '--remove-orphans') `
         -FailureMessage 'Docker Compose up failed.'
 
     # Backend가 교체될 때 Caddy가 현재 Docker DNS 대상을 다시 잡도록 게이트웨이만 재생성한다.
     Invoke-DockerChecked `
-        -Arguments @('--config', $DockerConfigPath, 'compose', '-f', $ComposePath, 'up', '-d', '--no-deps', '--force-recreate', 'caddy') `
+        -Arguments @('compose', '-f', $ComposePath, 'up', '-d', '--no-deps', '--force-recreate', 'caddy') `
         -FailureMessage 'Caddy gateway refresh failed.'
 
     # Compose가 새 MariaDB를 띄운 뒤 실제 앱 계정으로 한 번 더 검증한다.

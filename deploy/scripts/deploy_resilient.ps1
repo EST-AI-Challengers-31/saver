@@ -87,16 +87,16 @@ if ($cleanRebuildRequested) {
     Push-Location -LiteralPath $MoveAiPath
     try {
         Write-Host 'Refreshing MoveAI main before shared-edge clean rebuild...'
-        Invoke-NativeChecked -FailureMessage 'MoveAI git restore failed.' -Command {
-            git restore --source=HEAD --staged --worktree -- Caddyfile
-        }
         Invoke-NativeChecked -FailureMessage 'MoveAI git fetch failed.' -Command {
             git fetch --prune origin main
+        }
+        Invoke-NativeChecked -FailureMessage 'MoveAI git reset failed.' -Command {
+            git reset --hard origin/main
         }
         Invoke-NativeChecked -FailureMessage 'MoveAI git checkout failed.' -Command {
             git checkout -B main origin/main
         }
-        Invoke-NativeChecked -FailureMessage 'MoveAI git reset failed.' -Command {
+        Invoke-NativeChecked -FailureMessage 'MoveAI final git reset failed.' -Command {
             git reset --hard origin/main
         }
 

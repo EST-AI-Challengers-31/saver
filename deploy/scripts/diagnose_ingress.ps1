@@ -90,29 +90,60 @@ function Show-SharedEdgeProxy {
     Write-Host '--- Shared edge proxy: moveai-caddy-1 ---'
     Write-Host ('container_id=' + $edgeContainerId)
 
-    Write-Host 'Mounts:'
-    & docker inspect $edgeContainerId --format '{{range .Mounts}}{{println .Type "|" .Source "->" .Destination "|rw=" .RW}}{{end}}' 2>&1 |
-        ForEach-Object { Write-Host $_ }
+    $inspect = $null
+    try {
+        $inspect = ((& docker inspect $edgeContainerId 2>$null | Out-String) | ConvertFrom-Json | Select-Object -First 1)
+    }
+    catch {
+        Write-Warning ('docker inspect JSON parsing failed: ' + $_.Exception.Message)
+    }
 
-    Write-Host 'Networks:'
-    & docker inspect $edgeContainerId --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' 2>&1 |
-        ForEach-Object { Write-Host $_ }
+    if ($null -ne $inspect) {
+        Write-Host 'Mounts:'
+        foreach ($mount in @($inspect.Mounts)) {
+            Write-Host (
+                'type={0} source={1} destination={2} rw={3}' -f
+                $mount.Type,
+                $mount.Source,
+                $mount.Destination,
+                $mount.RW
+            )
+        }
+
+        Write-Host 'Networks:'
+        foreach ($network in @($inspect.NetworkSettings.Networks.PSObject.Properties.Name)) {
+            Write-Host $network
+        }
+
+        Write-Host 'Relevant environment:'
+        $apiDomain = @($inspect.Config.Env | Where-Object { $_ -like 'API_DOMAIN=*' }) | Select-Object -First 1
+        if ($apiDomain) {
+            Write-Host $apiDomain
+        }
+        else {
+            Write-Host 'API_DOMAIN=<not-set>'
+        }
+    }
 
     Write-Host 'Caddyfile:'
-    & docker exec $edgeContainerId sh -c 'if [ -f /etc/caddy/Caddyfile ]; then sed -n "1,240p" /etc/caddy/Caddyfile; else echo "Caddyfile not found"; fi' 2>&1 |
-        ForEach-Object { Write-Host $_ }
+    try {
+        & docker exec $edgeContainerId cat /etc/caddy/Caddyfile 2>&1 |
+            ForEach-Object { Write-Host $_ }
+    }
+    catch {
+        Write-Warning ('Could not read shared Caddyfile: ' + $_.Exception.Message)
+    }
 
     $targetUrl = "http://host.docker.internal:$DahumPort/"
     Write-Host ('Shared-edge reachability probe: ' + $targetUrl)
-    $probeCommand = 'wget -q -T 5 -O - "' + $targetUrl + '"'
     try {
-        $content = (& docker exec $edgeContainerId sh -c $probeCommand 2>$null | Out-String)
+        $content = (& docker exec $edgeContainerId wget -q -T 5 -O - $targetUrl 2>$null | Out-String)
         $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 0 -and $content -match '<title>닿음 \| 가족 보안 도우미</title>') {
-            Write-Host 'shared_edge_to_dahum=reachable title_match=true'
+        if ($exitCode -eq 0 -and $content.Contains('<div id="root"></div>')) {
+            Write-Host 'shared_edge_to_dahum=reachable root_marker=true'
         }
         elseif ($exitCode -eq 0) {
-            Write-Host 'shared_edge_to_dahum=reachable title_match=false'
+            Write-Host 'shared_edge_to_dahum=reachable root_marker=false'
         }
         else {
             Write-Host ('shared_edge_to_dahum=failed exit=' + $exitCode)

@@ -1,0 +1,52 @@
+name: Rebuild shared production edge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/rebuild-shared-edge.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: shared-production-edge
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild-shared-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Clean rebuild MoveAI shared edge on Windows mini PC
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          command_timeout: 20m
+          script_stop: true
+          script: |
+            powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Set-Location -LiteralPath 'C:\MOVEAI'; git restore --source=HEAD --staged --worktree -- Caddyfile; if ($LASTEXITCODE -ne 0) { throw 'git restore failed' }; git fetch --prune origin main; if ($LASTEXITCODE -ne 0) { throw 'git fetch failed' }; git checkout -B main origin/main; if ($LASTEXITCODE -ne 0) { throw 'git checkout failed' }; git reset --hard origin/main; if ($LASTEXITCODE -ne 0) { throw 'git reset failed' }; & 'C:\MOVEAI\scripts\deploy-remote.ps1'; if ($LASTEXITCODE -ne 0) { throw 'MoveAI shared edge rebuild failed' }; docker ps --filter 'name=moveai-caddy-1' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+
+      - name: Verify public Dahum route through shared edge
+        shell: bash
+        run: |
+          set -u
+          for attempt in $(seq 1 36); do
+            body="$(mktemp)"
+            code="$(curl -L -sS -o "$body" -w '%{http_code}' --connect-timeout 5 --max-time 12 http://yellow.it.kr/ || true)"
+            if [[ "$code" =~ ^2[0-9][0-9]$ ]] && grep -Fq '<title>닿음 | 가족 보안 도우미</title>' "$body"; then
+              echo "Shared edge verified: http://yellow.it.kr/ (HTTP $code)"
+              rm -f "$body"
+              exit 0
+            fi
+            echo "Shared edge not ready: attempt=$attempt http=${code:-000}"
+            rm -f "$body"
+            sleep 5
+          done
+          echo 'Shared edge verification failed.'
+          exit 1

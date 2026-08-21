@@ -52,7 +52,143 @@ function Assert-RequiredEnv {
     }
 }
 
-function Initialize-DockerConfig {
+function Invoke-DockerChecked {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$Quiet
+    )
+
+    # Windows PowerShell 5.1은 native stderr를 ErrorRecord로 바꿀 수 있으므로
+    # 실행 중에만 Continue로 낮추고 exit code를 직접 검사한다.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Quiet) {
+            & docker @Arguments *> $null
+        }
+        else {
+            & docker @Arguments
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw ("$FailureMessage (exit code: $exitCode)")
+    }
+}
+
+function Test-DockerComposePlugin {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker compose version *> $null
+        return ($LASTEXITCODE -eq 0)
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+function Resolve-ComposeMode {
+    if (Test-DockerComposePlugin) {
+        Write-Host 'Docker Compose mode: docker compose plugin'
+        return 'plugin'
+    }
+
+    $legacy = Get-Command 'docker-compose.exe' -ErrorAction SilentlyContinue
+    if (-not $legacy) {
+        $legacy = Get-Command 'docker-compose' -ErrorAction SilentlyContinue
+    }
+
+    if ($legacy) {
+        Write-Host ('Docker Compose mode: legacy executable -> ' + $legacy.Source)
+        return 'legacy'
+    }
+
+    throw 'Docker Compose is not available in the Windows SSH session.'
+}
+
+function Invoke-ComposeChecked {
+    param(
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$Quiet
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Mode -eq 'plugin') {
+            if ($Quiet) {
+                & docker compose @Arguments *> $null
+            }
+            else {
+                & docker compose @Arguments
+            }
+        }
+        else {
+            if ($Quiet) {
+                & docker-compose @Arguments *> $null
+            }
+            else {
+                & docker-compose @Arguments
+            }
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw ("$FailureMessage (exit code: $exitCode)")
+    }
+}
+
+function Get-ComposeRunningServices {
+    param(
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$ComposePath
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Mode -eq 'plugin') {
+            $output = @(& docker compose -f $ComposePath ps --status running --services 2>$null)
+        }
+        else {
+            # legacy docker-compose는 --status 옵션을 지원하지 않을 수 있으므로
+            # 실제 실행 중인 컨테이너는 Docker label로 확인한다.
+            $output = @(
+                & docker ps `
+                    --filter 'label=com.docker.compose.project=dahum' `
+                    --format '{{.Label "com.docker.compose.service"}}' `
+                    2>$null
+            )
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw 'Could not inspect running Dahum services.'
+    }
+
+    return @($output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Initialize-DockerAuthConfig {
     param(
         [string]$ProjectRoot,
         [string]$User,
@@ -91,8 +227,20 @@ function Initialize-DockerConfig {
         [System.Text.UTF8Encoding]::new($false)
     )
 
-    $env:DOCKER_CONFIG = $dockerConfig
+    # 중요: DOCKER_CONFIG 환경변수를 전역으로 바꾸지 않는다.
+    # Docker Desktop의 compose CLI plugin 탐색이 깨질 수 있기 때문이다.
     return $dockerConfig
+}
+
+function Pull-PrivateImage {
+    param(
+        [Parameter(Mandatory = $true)][string]$DockerConfigPath,
+        [Parameter(Mandatory = $true)][string]$Image
+    )
+
+    Invoke-DockerChecked `
+        -Arguments @('--config', $DockerConfigPath, 'pull', $Image) `
+        -FailureMessage ("Could not pull private image: $Image")
 }
 
 function Wait-WebHealth {
@@ -127,6 +275,7 @@ $RuntimePath = Join-Path $DahumHome 'runtime'
 $ComposePath = Join-Path $DeployDir 'docker-compose.yml'
 $BackupPath = Join-Path $PSScriptRoot 'backup_mariadb.ps1'
 $DockerConfigPath = $null
+$ComposeMode = $null
 
 try {
     Import-RuntimeConfig -EncodedConfig $RuntimeConfigBase64
@@ -155,35 +304,42 @@ try {
     $env:BACKEND_IMAGE = $BackendImage
     $env:AI_IMAGE = $AiImage
 
-    # Windows SSH 비대화형 세션에서도 Docker Desktop Linux Engine을 직접 사용한다.
+    # Windows SSH 비대화형 세션에서 Docker Desktop Linux Engine을 직접 사용한다.
     $env:DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
 
     New-Item -ItemType Directory -Path $RuntimePath -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $RuntimePath 'data') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $RuntimePath 'backup') -Force | Out-Null
 
-    $DockerConfigPath = Initialize-DockerConfig `
+    Invoke-DockerChecked `
+        -Arguments @('info') `
+        -FailureMessage 'Docker Desktop Linux engine is not available.' `
+        -Quiet
+
+    # Compose 탐지는 기본 Docker 설정에서 먼저 수행한다.
+    $ComposeMode = Resolve-ComposeMode
+
+    # GHCR 인증은 private image pull에만 별도 config를 사용한다.
+    # compose 실행에는 기본 Docker 설정을 유지해 CLI plugin 검색을 보존한다.
+    $DockerConfigPath = Initialize-DockerAuthConfig `
         -ProjectRoot $AppPath `
         -User $RegistryUser `
         -Token $RegistryToken
 
-    & docker info *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Desktop Linux engine is not available.'
-    }
+    Pull-PrivateImage -DockerConfigPath $DockerConfigPath -Image $BackendImage
+    Pull-PrivateImage -DockerConfigPath $DockerConfigPath -Image $AiImage
 
-    & docker compose -f $ComposePath config *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Compose configuration validation failed.'
-    }
+    Invoke-ComposeChecked `
+        -Mode $ComposeMode `
+        -Arguments @('-f', $ComposePath, 'config') `
+        -FailureMessage 'Docker Compose configuration validation failed.' `
+        -Quiet
 
-    $running = @(
-        & docker compose -f $ComposePath ps --status running --services
-    )
+    $running = Get-ComposeRunningServices -Mode $ComposeMode -ComposePath $ComposePath
 
     if (($running -contains 'mariadb') -and (Test-Path -LiteralPath $BackupPath)) {
         Write-Host 'Backing up MariaDB before deployment...'
-        & $BackupPath -ComposePath $ComposePath -RuntimePath $RuntimePath
+        & $BackupPath -RuntimePath $RuntimePath
         if ($LASTEXITCODE -ne 0) {
             throw 'MariaDB backup failed.'
         }
@@ -192,15 +348,17 @@ try {
         Write-Host 'MariaDB backup skipped because the service is not running yet.'
     }
 
-    & docker compose -f $ComposePath pull backend ai caddy mariadb
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker image pull failed.'
-    }
+    # Public images만 기본 Docker/Compose 설정으로 갱신한다.
+    Invoke-ComposeChecked `
+        -Mode $ComposeMode `
+        -Arguments @('-f', $ComposePath, 'pull', 'mariadb', 'caddy') `
+        -FailureMessage 'Could not pull public MariaDB/Caddy images.'
 
-    & docker compose -f $ComposePath up -d --remove-orphans
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Compose up failed.'
-    }
+    # Backend/AI는 위에서 정확한 SHA tag를 이미 pull했다.
+    Invoke-ComposeChecked `
+        -Mode $ComposeMode `
+        -Arguments @('-f', $ComposePath, 'up', '-d', '--remove-orphans', '--pull', 'never') `
+        -FailureMessage 'Docker Compose up failed.'
 
     $hostPort = [int]$env:DAHUM_HOST_PORT
     Wait-WebHealth -Port $hostPort -TimeoutSeconds 150

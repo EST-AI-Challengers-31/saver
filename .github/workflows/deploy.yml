@@ -131,3 +131,26 @@ jobs:
           command_timeout: 20m
           script: |
             cd /d C:\home\dahum\app && git reset --hard HEAD && git clean -fd && git fetch --prune origin main && git checkout -B main origin/main && git reset --hard origin/main && git clean -fd && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\deploy_resilient.ps1 -BackendImage "${{ steps.images.outputs.backend }}:${{ github.sha }}" -AiImage "${{ steps.images.outputs.ai }}:${{ github.sha }}" -RegistryUser "${{ github.actor }}" -RegistryToken "${{ secrets.GITHUB_TOKEN }}" -RuntimeConfigBase64 "${{ steps.runtime_config.outputs.config }}"
+
+      - name: Verify public yellow.it.kr route
+        shell: bash
+        env:
+          PUBLIC_URL: https://yellow.it.kr/
+        run: |
+          set -u
+          rm -f /tmp/dahum-public.html
+          for attempt in $(seq 1 30); do
+            code="$(curl -L -sS -o /tmp/dahum-public.html -w '%{http_code}' --connect-timeout 5 --max-time 12 "$PUBLIC_URL" || true)"
+            if [[ "$code" =~ ^2[0-9][0-9]$ ]] && grep -Fq '<title>닿음 | 가족 보안 도우미</title>' /tmp/dahum-public.html; then
+              echo "Public Dahum route verified: $PUBLIC_URL (HTTP $code)"
+              exit 0
+            fi
+            echo "Public route not ready yet: attempt=$attempt http=${code:-000}"
+            sleep 5
+          done
+          echo "Public route verification failed: $PUBLIC_URL"
+          if [[ -f /tmp/dahum-public.html ]]; then
+            head -c 600 /tmp/dahum-public.html || true
+            echo
+          fi
+          exit 1

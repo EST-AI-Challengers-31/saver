@@ -87,12 +87,7 @@ if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
     $RuntimePath = Join-Path $DahumHome 'runtime'
 }
 
-$requiredVariables = @(
-    'MARIADB_DATABASE',
-    'MARIADB_USER',
-    'MARIADB_PASSWORD'
-)
-
+$requiredVariables = @('MARIADB_DATABASE', 'MARIADB_USER', 'MARIADB_PASSWORD')
 $missingVariables = @()
 foreach ($name in $requiredVariables) {
     $value = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -100,22 +95,16 @@ foreach ($name in $requiredVariables) {
         $missingVariables += $name
     }
 }
-
 if ($missingVariables.Count -gt 0) {
-    throw (
-        'Required MariaDB backup environment variables are missing: ' +
-        ($missingVariables -join ', ')
-    )
+    throw ('Required MariaDB backup environment variables are missing: ' + ($missingVariables -join ', '))
 }
 
 $backupDir = Join-Path $RuntimePath 'backup\mariadb'
 New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $backupFile = Join-Path $backupDir "dahum_$timestamp.sql"
 $errorFile = Join-Path $backupDir "dahum_$timestamp.stderr.log"
 
-# Compose plugin에 의존하지 않고 compose label로 현재 MariaDB 컨테이너를 찾는다.
 $previousPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
@@ -131,30 +120,20 @@ try {
 finally {
     $ErrorActionPreference = $previousPreference
 }
-
 if ($dockerPsExitCode -ne 0) {
     throw 'Could not inspect the running MariaDB container.'
 }
 
-$containerId = @(
-    $containerIds |
-        ForEach-Object { [string]$_ } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-) | Select-Object -First 1
-
+$containerId = @($containerIds | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($containerId)) {
     throw "Running MariaDB container was not found for project '$ProjectName'."
 }
 
 Write-Host "Creating MariaDB backup from container $containerId -> $backupFile"
 
-# MariaDB 초기화 환경변수는 기존 volume에 대해 다시 적용되지 않는다.
-# 따라서 GitHub Actions의 최신 비밀번호보다 현재 실행 중인 DB가 생성될 때의
-# 컨테이너 환경변수가 실제 DB 계정과 일치할 수 있다. 둘 다 검증하고 동작하는 쪽을 쓴다.
 $containerDatabase = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_DATABASE'
 $containerUser = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_USER'
 $containerPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_PASSWORD'
-
 $runtimeDatabase = $env:MARIADB_DATABASE
 $runtimeUser = $env:MARIADB_USER
 $runtimePassword = $env:MARIADB_PASSWORD
@@ -164,21 +143,13 @@ $databaseUser = $null
 $databasePassword = $null
 $credentialSource = $null
 
-if (Test-MariaDbCredential `
-        -ContainerId $containerId `
-        -Database $containerDatabase `
-        -User $containerUser `
-        -Password $containerPassword) {
+if (Test-MariaDbCredential -ContainerId $containerId -Database $containerDatabase -User $containerUser -Password $containerPassword) {
     $databaseName = $containerDatabase
     $databaseUser = $containerUser
     $databasePassword = $containerPassword
     $credentialSource = 'existing-container'
 }
-elif (Test-MariaDbCredential `
-        -ContainerId $containerId `
-        -Database $runtimeDatabase `
-        -User $runtimeUser `
-        -Password $runtimePassword) {
+elseif (Test-MariaDbCredential -ContainerId $containerId -Database $runtimeDatabase -User $runtimeUser -Password $runtimePassword) {
     $databaseName = $runtimeDatabase
     $databaseUser = $runtimeUser
     $databasePassword = $runtimePassword
@@ -190,7 +161,6 @@ else {
 
 Write-Host "MariaDB backup credential source: $credentialSource"
 
-# SQL dump는 stdout만 파일에 저장한다. stderr가 SQL에 섞이지 않게 분리한다.
 $previousPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
@@ -212,30 +182,17 @@ finally {
 }
 
 if ($dumpExitCode -ne 0) {
-    $detail = if (Test-Path -LiteralPath $errorFile) {
-        (Get-Content -LiteralPath $errorFile -Raw -ErrorAction SilentlyContinue)
-    }
-    else {
-        ''
-    }
+    $detail = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile -Raw -ErrorAction SilentlyContinue } else { '' }
     throw ('MariaDB backup command failed. ' + $detail)
 }
-
 if (-not (Test-Path -LiteralPath $backupFile)) {
     throw 'MariaDB backup file was not created.'
 }
-
 $backupInfo = Get-Item -LiteralPath $backupFile
 if ($backupInfo.Length -eq 0) {
     throw 'MariaDB backup file is empty.'
 }
-
 if (Test-Path -LiteralPath $errorFile) {
     Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
 }
-
-Write-Host (
-    "MariaDB backup completed: {0} ({1} bytes)" -f
-    $backupFile,
-    $backupInfo.Length
-)
+Write-Host ("MariaDB backup completed: {0} ({1} bytes)" -f $backupFile, $backupInfo.Length)

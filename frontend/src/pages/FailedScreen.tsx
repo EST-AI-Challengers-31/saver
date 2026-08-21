@@ -1,4 +1,4 @@
-import svgFailed from "@/imports/ResultErrorScreen/svg-w14iub9540"
+import svgFailed from "@/imports/ResultDangerScreen/svg-eijb8y654a"
 import svgUpload from "@/imports/UploadInitialScreen/svg-wqv28lyrjs"
 import imgHeaderLogo from "@/imports/image-4.png"
 
@@ -126,12 +126,12 @@ export function FailedScreen({
         <BrandHeader onMenuOpen={onMenuOpen} onLogoClick={onLogoClick} />
         <div className="flex flex-col items-center gap-[24px] px-[24px] py-[40px] text-center w-full my-auto">
           <div className="bg-[#fff1f1] flex items-center justify-center rounded-[32px] size-[80px]">
-            <svg className="size-[40px]" fill="none" viewBox="0 0 40 40">
+            <svg className="size-[40px]" fill="none" viewBox="0 0 20 20">
               <path
                 d={svgFailed.p119e80b0}
                 stroke="#FF5C5C"
                 strokeLinecap="round"
-                strokeWidth="2.5"
+                strokeWidth="2"
               />
             </svg>
           </div>

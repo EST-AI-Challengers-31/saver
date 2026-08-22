@@ -65,7 +65,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           command_timeout: 5m
           script: |
-            cd /d C:\home\dahum\app && git fetch --prune origin main && git checkout -B main origin/main && git reset --hard origin/main && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\diagnose_ingress.ps1 -HostPort "${{ vars.DAHUM_HOST_PORT || '9000' }}"
+            cd /d C:\home\dahum\app && git fetch --prune origin main && git reset --hard origin/main && git clean -fd && powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\home\dahum\app\deploy\scripts\diagnose_ingress.ps1 -HostPort "${{ vars.DAHUM_HOST_PORT || '9000' }}"
 
       - name: Publish ingress diagnostic result status
         if: ${{ always() }}

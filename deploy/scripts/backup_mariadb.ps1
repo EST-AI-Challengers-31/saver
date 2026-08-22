@@ -1,198 +1,198 @@
 param(
-    [string]$RuntimePath,
-    [string]$ProjectName = 'dahum',
-    [string]$ServiceName = 'mariadb'
+    [string]$ComposePath,
+    [string]$RuntimePath
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Get-ContainerEnvValue {
-    param(
-        [Parameter(Mandatory = $true)][string]$ContainerId,
-        [Parameter(Mandatory = $true)][string]$Name
-    )
 
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $lines = @(
-            & docker inspect `
-                --format '{{range .Config.Env}}{{println .}}{{end}}' `
-                $ContainerId `
-                2>$null
-        )
-        $exitCode = $LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
-    }
+# ============================================================
+# 기본 경로 계산
+# ============================================================
 
-    if ($exitCode -ne 0) {
-        return $null
-    }
-
-    $prefix = "$Name="
-    foreach ($line in $lines) {
-        $text = [string]$line
-        if ($text.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-            return $text.Substring($prefix.Length)
-        }
-    }
-
-    return $null
-}
-
-function Test-MariaDbCredential {
-    param(
-        [Parameter(Mandatory = $true)][string]$ContainerId,
-        [Parameter(Mandatory = $true)][string]$Database,
-        [Parameter(Mandatory = $true)][string]$User,
-        [Parameter(Mandatory = $true)][string]$Password
-    )
-
-    if (
-        [string]::IsNullOrWhiteSpace($Database) -or
-        [string]::IsNullOrWhiteSpace($User) -or
-        [string]::IsNullOrWhiteSpace($Password)
-    ) {
-        return $false
-    }
-
-    $previousPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        & docker exec `
-            -e "MYSQL_PWD=$Password" `
-            $ContainerId `
-            mariadb `
-            "-u$User" `
-            $Database `
-            '-e' `
-            'SELECT 1;' `
-            *> $null
-        return ($LASTEXITCODE -eq 0)
-    }
-    catch {
-        return $false
-    }
-    finally {
-        $ErrorActionPreference = $previousPreference
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
+if (
+    [string]::IsNullOrWhiteSpace($ComposePath) -or
+    [string]::IsNullOrWhiteSpace($RuntimePath)
+) {
     $DeployDir = Split-Path -Parent $PSScriptRoot
     $AppPath = Split-Path -Parent $DeployDir
     $DahumHome = Split-Path -Parent $AppPath
-    $RuntimePath = Join-Path $DahumHome 'runtime'
+
+    if ([string]::IsNullOrWhiteSpace($RuntimePath)) {
+        $RuntimePath = Join-Path $DahumHome 'runtime'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ComposePath)) {
+        $ComposePath = Join-Path $DeployDir 'docker-compose.yml'
+    }
 }
 
-$requiredVariables = @('MARIADB_DATABASE', 'MARIADB_USER', 'MARIADB_PASSWORD')
+
+# ============================================================
+# 필수 파일 확인
+# ============================================================
+
+if (-not (Test-Path -LiteralPath $ComposePath)) {
+    throw "Compose file not found: $ComposePath"
+}
+
+
+# ============================================================
+# 필수 DB 환경변수 확인
+#
+# GitHub Actions
+# -> deploy.ps1
+# -> 현재 PowerShell 프로세스로 전달된 값을 사용한다.
+# ============================================================
+
+$requiredVariables = @(
+    'MARIADB_DATABASE',
+    'MARIADB_USER',
+    'MARIADB_PASSWORD'
+)
+
 $missingVariables = @()
+
 foreach ($name in $requiredVariables) {
-    $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+
+    $value = [Environment]::GetEnvironmentVariable(
+        $name,
+        'Process'
+    )
+
     if ([string]::IsNullOrWhiteSpace($value)) {
         $missingVariables += $name
     }
 }
+
 if ($missingVariables.Count -gt 0) {
-    throw ('Required MariaDB backup environment variables are missing: ' + ($missingVariables -join ', '))
-}
-
-$backupDir = Join-Path $RuntimePath 'backup\mariadb'
-New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$backupFile = Join-Path $backupDir "dahum_$timestamp.sql"
-$errorFile = Join-Path $backupDir "dahum_$timestamp.stderr.log"
-
-$previousPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    $containerIds = @(
-        & docker ps `
-            --filter "label=com.docker.compose.project=$ProjectName" `
-            --filter "label=com.docker.compose.service=$ServiceName" `
-            --format '{{.ID}}' `
-            2>$null
+    throw (
+        'Required MariaDB backup environment variables are missing: ' +
+        ($missingVariables -join ', ')
     )
-    $dockerPsExitCode = $LASTEXITCODE
-}
-finally {
-    $ErrorActionPreference = $previousPreference
-}
-if ($dockerPsExitCode -ne 0) {
-    throw 'Could not inspect the running MariaDB container.'
 }
 
-$containerId = @($containerIds | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($containerId)) {
-    throw "Running MariaDB container was not found for project '$ProjectName'."
+
+# ============================================================
+# 환경변수 읽기
+# ============================================================
+
+$databaseName = $env:MARIADB_DATABASE
+$databaseUser = $env:MARIADB_USER
+$databasePassword = $env:MARIADB_PASSWORD
+
+
+# ============================================================
+# 백업 디렉터리 준비
+# ============================================================
+
+$backupDir = Join-Path `
+    $RuntimePath `
+    'backup\mariadb'
+
+New-Item `
+    -ItemType Directory `
+    -Path $backupDir `
+    -Force |
+    Out-Null
+
+
+$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+
+$backupFile = Join-Path `
+    $backupDir `
+    "dahum_$timestamp.sql"
+
+
+Write-Host "Creating MariaDB backup: $backupFile"
+
+
+# ============================================================
+# MariaDB 연결 확인
+#
+# Windows -> Docker -> shell 문자열 파싱을 피하기 위해
+# sh -lc를 사용하지 않는다.
+#
+# MYSQL_PWD는 MariaDB client가 인식하는 비밀번호
+# 환경변수다.
+# ============================================================
+
+& docker compose `
+    -f $ComposePath `
+    exec `
+    -T `
+    -e "MYSQL_PWD=$databasePassword" `
+    mariadb `
+    mariadb `
+    "-u$databaseUser" `
+    $databaseName `
+    '-e' `
+    'SELECT 1;'
+
+
+if ($LASTEXITCODE -ne 0) {
+    throw 'MariaDB connection test failed before backup.'
 }
 
-Write-Host "Creating MariaDB backup from container $containerId -> $backupFile"
 
-$containerDatabase = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_DATABASE'
-$containerUser = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_USER'
-$containerPassword = Get-ContainerEnvValue -ContainerId $containerId -Name 'MARIADB_PASSWORD'
-$runtimeDatabase = $env:MARIADB_DATABASE
-$runtimeUser = $env:MARIADB_USER
-$runtimePassword = $env:MARIADB_PASSWORD
+Write-Host 'MariaDB connection test passed.'
 
-$databaseName = $null
-$databaseUser = $null
-$databasePassword = $null
-$credentialSource = $null
 
-if (Test-MariaDbCredential -ContainerId $containerId -Database $containerDatabase -User $containerUser -Password $containerPassword) {
-    $databaseName = $containerDatabase
-    $databaseUser = $containerUser
-    $databasePassword = $containerPassword
-    $credentialSource = 'existing-container'
-}
-elseif (Test-MariaDbCredential -ContainerId $containerId -Database $runtimeDatabase -User $runtimeUser -Password $runtimePassword) {
-    $databaseName = $runtimeDatabase
-    $databaseUser = $runtimeUser
-    $databasePassword = $runtimePassword
-    $credentialSource = 'runtime-config'
-}
-else {
-    throw 'MariaDB backup authentication failed with both the existing container credential and the GitHub runtime credential. No data was changed.'
-}
+# ============================================================
+# MariaDB dump
+# ============================================================
 
-Write-Host "MariaDB backup credential source: $credentialSource"
-
-$previousPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    & docker exec `
+$dumpOutput = @(
+    & docker compose `
+        -f $ComposePath `
+        exec `
+        -T `
         -e "MYSQL_PWD=$databasePassword" `
-        $containerId `
+        mariadb `
         mariadb-dump `
         '--single-transaction' `
         '--routines' `
         '--triggers' `
         "-u$databaseUser" `
-        $databaseName `
-        1>$backupFile `
-        2>$errorFile
-    $dumpExitCode = $LASTEXITCODE
-}
-finally {
-    $ErrorActionPreference = $previousPreference
+        $databaseName
+)
+
+
+if ($LASTEXITCODE -ne 0) {
+    throw 'MariaDB backup command failed.'
 }
 
-if ($dumpExitCode -ne 0) {
-    $detail = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile -Raw -ErrorAction SilentlyContinue } else { '' }
-    throw ('MariaDB backup command failed. ' + $detail)
-}
+
+# ============================================================
+# 백업 파일 저장
+# ============================================================
+
+[System.IO.File]::WriteAllLines(
+    $backupFile,
+    $dumpOutput,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
+
+# ============================================================
+# 백업 파일 검증
+# ============================================================
+
 if (-not (Test-Path -LiteralPath $backupFile)) {
     throw 'MariaDB backup file was not created.'
 }
+
+
 $backupInfo = Get-Item -LiteralPath $backupFile
+
+
 if ($backupInfo.Length -eq 0) {
     throw 'MariaDB backup file is empty.'
 }
-if (Test-Path -LiteralPath $errorFile) {
-    Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
-}
-Write-Host ("MariaDB backup completed: {0} ({1} bytes)" -f $backupFile, $backupInfo.Length)
+
+
+Write-Host (
+    "MariaDB backup completed: {0} ({1} bytes)" -f
+    $backupFile,
+    $backupInfo.Length
+)

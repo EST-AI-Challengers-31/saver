@@ -1,180 +1,151 @@
-from __future__ import annotations
+import os
+from fastapi import FastAPI
+from pydantic import BaseModel
+import pandas as pd
+from pinecone import Pinecone, ServerlessSpec
+from langchain_upstage import UpstageEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from langchain_core.documents import Document
+from dotenv import load_dotenv
+from app.llm import generate_explanation
+from app.rerank import search_candidates, rerank_with_llm
 
-from contextlib import asynccontextmanager
+load_dotenv()
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+INDEX_NAME = "dahum-malware"
+EMBEDDING_DIM = 4096  # solar-embedding-1-large 기준
+SIMILARITY_THRESHOLD = 0.8  # 이 이상이면 MEDIUM, 미만이면 UNKNOWN
+TOP_K = 3
 
-from app.config import settings
-from app.db import dahum_db
-from app.fraud_db import fraud_db
-from app.fraud_service import fraud_analyzer
-from app.malware_service import malware_service
-from app.schemas import (
-    AnalyzeRequest,
-    AnalyzeResponse,
-    FraudAnalyzeResponse,
-    FraudTextRequest,
-    ScanDetail,
-    ScanSummary,
-    TextAnalyzeRequest,
-)
-from app.speech_service import SpeechNotConfiguredError, transcribe_audio
-from app.vector_service import vector_search
+embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
+app = FastAPI(title="Dahum AI", version="0.1.0")
 
-
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    malware_service.load()
-    fraud_db.ensure_schema()
-    yield
+class AnalyzeRequest(BaseModel):
+    패키지명: list[str]
 
 
-app = FastAPI(
-    title="Dahum AI",
-    description="Exact Match HIGH -> Vector MEDIUM -> UNKNOWN + fraud signal analysis",
-    version="3.0.0-family-security",
-    lifespan=lifespan,
-)
+class AppResult(BaseModel):
+    패키지명: str
+    child_message: str
+    parent_message: str
 
 
-@app.get("/health")
-def health() -> dict:
-    return {
-        "status": "UP" if malware_service.ready else "STARTING",
-        "python_first": True,
-        "db_configured": dahum_db.enabled,
-        "vector_provider": vector_search.provider_name,
-        "threshold": settings.similarity_threshold,
-        "top_k": settings.top_k,
-    }
+class AnalyzeResponse(BaseModel):
+    results: list[AppResult]
 
 
-@app.get("/api/v1/meta")
-def metadata() -> dict:
-    return {
-        "policy": "EXACT_HIGH__VECTOR_MEDIUM__ELSE_UNKNOWN",
-        "unknown_means_safe": False,
-        "vector_provider": vector_search.provider_name,
-        "pinecone_configured": bool(settings.pinecone_api_key),
-        "upstage_configured": bool(settings.upstage_api_key),
-        "llm_configured": bool(settings.llm_api_key and settings.llm_api_base_url),
-        "clova_speech_configured": bool(
-            settings.clova_speech_invoke_url and settings.clova_speech_secret
-        ),
-        "safe_browsing_configured": bool(settings.safe_browsing_api_key),
-    }
-
-
-def _make_response(queries: list[str], source_type: str, source_label: str | None) -> AnalyzeResponse:
-    if not malware_service.ready:
-        raise HTTPException(status_code=503, detail="AI 데이터가 아직 준비되지 않았습니다.")
-    results = [malware_service.analyze(query) for query in queries]
-    scan_id = dahum_db.save_scan(source_type, source_label, [result.model_dump() for result in results])
-    return AnalyzeResponse(
-        scan_id=scan_id,
-        results=results,
-        similarity_threshold=settings.similarity_threshold,
-        vector_provider=vector_search.provider_name,
-    )
-
-
-@app.post("/api/v1/analyze/packages", response_model=AnalyzeResponse)
-def analyze_packages(request: AnalyzeRequest) -> AnalyzeResponse:
-    return _make_response(
-        request.packages,
-        request.source_type or "PACKAGE",
-        request.source_label or f"{len(request.packages)} apps",
-    )
-
-
-@app.post("/api/v1/analyze/text", response_model=AnalyzeResponse)
-def analyze_text(request: TextAnalyzeRequest) -> AnalyzeResponse:
-    query = request.query.strip()
-    return _make_response([query], "TEXT", query)
-
-
-@app.post("/analyze")
-def legacy_analyze(request: AnalyzeRequest) -> dict:
-    response = _make_response(
-        request.packages,
-        request.source_type or "LEGACY_PACKAGE",
-        request.source_label or f"{len(request.packages)} apps",
-    )
-    legacy_results: list[dict] = []
-    for result in response.results:
-        item = result.model_dump()
-        item["패키지명"] = item["package_name"]
-        legacy_results.append(item)
-    return {
-        "scan_id": response.scan_id,
-        "results": legacy_results,
-        "policy": response.policy,
-        "similarity_threshold": response.similarity_threshold,
-        "vector_provider": response.vector_provider,
-    }
-
-
-@app.post("/api/v1/fraud/analyze", response_model=FraudAnalyzeResponse)
-def analyze_fraud_text(request: FraudTextRequest) -> FraudAnalyzeResponse:
-    result = fraud_analyzer.analyze(request.analysis_type, request.text)
-    analysis_id = fraud_db.save(
-        request.requester_user_id,
-        request.analysis_type,
-        "TEXT",
-        request.text,
-        result.model_dump(),
-    )
-    return result.model_copy(update={"analysis_id": analysis_id})
-
-
-@app.post("/api/v1/fraud/voice/audio", response_model=FraudAnalyzeResponse)
-async def analyze_voice_audio(
-    media: UploadFile = File(...),
-    requester_user_id: str | None = Form(default=None),
-) -> FraudAnalyzeResponse:
-    limit = max(1, settings.fraud_max_audio_mb) * 1024 * 1024
-    content = await media.read(limit + 1)
-    if not content:
-        raise HTTPException(status_code=400, detail="음성 파일이 비어 있습니다.")
-    if len(content) > limit:
-        raise HTTPException(
-            status_code=413,
-            detail=f"음성 파일은 {settings.fraud_max_audio_mb}MB 이하만 업로드할 수 있습니다.",
+def get_vectorstore() -> PineconeVectorStore:
+    # LangChain PineconeVectorStore 래퍼 반환 (인덱스 없으면 생성)
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    if INDEX_NAME not in [i.name for i in pc.list_indexes()]:
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=EMBEDDING_DIM,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
         )
+    return PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
 
-    try:
-        transcript = transcribe_audio(
-            media.filename or "voice-audio",
-            content,
-            media.content_type,
+
+# ---------------------------------------------------------
+# 1. 인덱스 구축
+# ---------------------------------------------------------
+def build_index(csv_path: str, batch_size: int = 100):
+    # malware_embedding_data.csv -> Pinecone 적재 (LangChain Document 경유)
+    df = pd.read_csv(csv_path)
+    vectorstore = get_vectorstore()
+
+    for start in range(0, len(df), batch_size):
+        batch = df.iloc[start : start + batch_size]
+
+        documents = [
+            Document(
+                page_content=row["search_text"],
+                metadata={
+                    "malware_name": row["malware_name"],
+                    "malware_package": row["malware_package"],
+                    "malware_category": row["malware_category"],
+                },
+            )
+            for _, row in batch.iterrows()
+        ]
+        ids = [str(rid) for rid in batch["record_id"].tolist()]
+
+        vectorstore.add_documents(documents=documents, ids=ids)
+        print(f"[{start + len(batch)}/{len(df)}] 적재 완료")
+
+    print("인덱스 구축 완료")
+
+
+# ---------------------------------------------------------
+# 2. 미등록 package 유사도 검색 + 판정
+# ---------------------------------------------------------
+def check_app(package_name: str) -> dict:
+    
+    vectorstore = get_vectorstore()
+
+    # package를 자연어처럼 토큰화 (com.fake.bank -> com fake bank)
+    query_text = package_name.replace(".", " ")
+    results = vectorstore.similarity_search_with_score(query_text, k=TOP_K)
+
+    if not results:
+        risk_level = "UNKNOWN"
+        top_score = 0.0
+        matched_examples = []
+    else:
+        # LangChain Pinecone 결과는 (Document, score) 튜플
+        top_score = results[0][1]
+        risk_level = "MEDIUM" if top_score >= SIMILARITY_THRESHOLD else "UNKNOWN"
+        candidates = search_candidates(query_text, top_k=10)
+        if candidates:
+            reranked = rerank_with_llm(query_text, candidates, top_n=TOP_K)
+            matched_examples = [
+                {
+                    "malware_name": c["malware_name"],
+                    "malware_category": c["category"],
+                    "score": c["similarity"],
+                }
+                for c in reranked
+            ]
+        else: matched_examples = [
+                {
+                    "malware_name": doc.metadata["malware_name"],
+                    "malware_category": doc.metadata["malware_category"],
+                    "score": score,
+                }
+                for doc, score in results
+            ]
+
+    explanation = generate_explanation(risk_level, matched_examples)
+
+    return {
+        "risk_level": risk_level,
+        "similarity_score": top_score,
+        "matched_examples": matched_examples,
+        "is_verified_safe": False,  # UNKNOWN이어도 절대 '안전'을 의미하지 않음
+        "ai_explanation": explanation,
+    }
+
+ 
+def check_apps(package_names: list) -> list:
+    return [check_app(pkg) for pkg in package_names]
+
+
+# ---------------------------------------------------------
+# 3. FastAPI 라우트
+# ---------------------------------------------------------
+
+@app.post("/analyze", response_model=AnalyzeResponse)
+def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
+    raw_results = check_apps(request.패키지명)
+
+    results = [
+        AppResult(
+            패키지명=pkg,
+            child_message=raw["ai_explanation"]["child_message"],
+            parent_message=raw["ai_explanation"]["parent_message"],
         )
-    except SpeechNotConfiguredError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="음성 인식에 실패했습니다.") from exc
+        for pkg, raw in zip(request.패키지명, raw_results)
+    ]
 
-    result = fraud_analyzer.analyze("VOICE_PHISHING", transcript)
-    analysis_id = fraud_db.save(
-        requester_user_id,
-        "VOICE_PHISHING",
-        "AUDIO",
-        transcript,
-        result.model_dump(),
-    )
-    return result.model_copy(update={
-        "analysis_id": analysis_id,
-        "transcript": transcript,
-    })
-
-
-@app.get("/api/scans", response_model=list[ScanSummary])
-def scan_history(limit: int = Query(20, ge=1, le=100)):
-    return dahum_db.list_scans(limit)
-
-
-@app.get("/api/scans/{scan_id}", response_model=ScanDetail)
-def scan_detail(scan_id: str):
-    scan = dahum_db.get_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="분석 이력을 찾을 수 없습니다.")
-    return scan
+    return AnalyzeResponse(results=results)

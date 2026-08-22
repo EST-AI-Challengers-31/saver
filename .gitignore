@@ -3,21 +3,31 @@
 .env.*
 !.env.example
 runtime/
-.dahum_patch_backup/
+
+# Docker SSH helper generated on the server
 .docker-ci/
+
+# Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Spring / Gradle
 backend/.gradle/
 backend/build/
-backend/bin/
+
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# IDE / OS
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Logs / temporary backup files
 *.log
 *.tmp
 *.bak

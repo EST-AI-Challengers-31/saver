@@ -1,30 +1,43 @@
 package com.dahum.dto;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.List;
+public class AnalyzeResultItemDto {
 
-/**
- * Python app.schemas.AppResult 와 1:1로 맞춘 응답 항목 DTO입니다.
- */
-@JsonIgnoreProperties(ignoreUnknown = true)
-public record AnalyzeResultItemDto(
-        @JsonProperty("package_name") String packageName,
-        @JsonProperty("display_query") String displayQuery,
-        @JsonProperty("risk_level") String riskLevel,
-        @JsonProperty("match_type") String matchType,
-        @JsonProperty("exact_field") String exactField,
-        @JsonProperty("matched") boolean matched,
-        @JsonProperty("similarity_score") Double similarityScore,
-        @JsonProperty("malware_names") List<String> malwareNames,
-        @JsonProperty("malware_categories") List<String> malwareCategories,
-        @JsonProperty("matched_examples") List<MatchedExampleDto> matchedExamples,
-        @JsonProperty("evidence_summary") String evidenceSummary,
-        @JsonProperty("child_message") String childMessage,
-        @JsonProperty("parent_message") String parentMessage,
-        @JsonProperty("recommended_actions") List<String> recommendedActions,
-        @JsonProperty("explanation_method") String explanationMethod,
-        @JsonProperty("is_verified_safe") boolean verifiedSafe
-) {
+    @JsonProperty("패키지명")
+    private String packageName;
+
+    private String childMessage;
+    private String parentMessage;
+
+    public AnalyzeResultItemDto() {
+    }
+
+    public String getPackageName() {
+        return packageName;
+    }
+
+    public void setPackageName(String packageName) {
+        this.packageName = packageName;
+    }
+
+    @JsonProperty("child_message")
+    public String getChildMessage() {
+        return childMessage;
+    }
+
+    @JsonProperty("child_message")
+    public void setChildMessage(String childMessage) {
+        this.childMessage = childMessage;
+    }
+
+    @JsonProperty("parent_message")
+    public String getParentMessage() {
+        return parentMessage;
+    }
+
+    @JsonProperty("parent_message")
+    public void setParentMessage(String parentMessage) {
+        this.parentMessage = parentMessage;
+    }
 }

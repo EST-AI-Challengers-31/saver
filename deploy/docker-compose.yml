@@ -2,15 +2,15 @@ name: dahum
 
 services:
   mariadb:
-    image: ${MARIADB_IMAGE:-mariadb:11.4}
+    image: ${MARIADB_IMAGE}
     restart: unless-stopped
     environment:
-      MARIADB_DATABASE: ${MARIADB_DATABASE:-dahum}
-      MARIADB_USER: ${MARIADB_USER:-dahum_app}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+      MARIADB_USER: ${MARIADB_USER}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
     volumes:
-      - ${DAHUM_RUNTIME}/data/mariadb-python-first-v3:/var/lib/mysql
+      - ${DAHUM_RUNTIME}/data/mariadb:/var/lib/mysql
       - ../db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
@@ -18,39 +18,37 @@ services:
       timeout: 5s
       retries: 18
       start_period: 20s
-    networks: [dahum_internal]
+    networks:
+      - dahum_internal
 
   ai:
     image: ${AI_IMAGE:?AI_IMAGE is required}
     restart: unless-stopped
-    depends_on:
-      mariadb:
-        condition: service_healthy
     environment:
-      MARIADB_HOST: mariadb
-      MARIADB_PORT: 3306
-      MARIADB_DATABASE: ${MARIADB_DATABASE:-dahum}
-      MARIADB_USER: ${MARIADB_USER:-dahum_app}
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
-      VECTOR_PROVIDER: ${VECTOR_PROVIDER:-local}
+      CLOVA_OCR_API_KEY: ${CLOVA_OCR_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      PINECONE_API_KEY: ${PINECONE_API_KEY:?PINECONE_API_KEY is required}
+      PINECONE_INDEX: ${PINECONE_INDEX:-dahum-malware}
+      ALAN_CLIENT_ID: ${ALAN_CLIENT_ID:?ALAN_CLIENT_ID is required}
+      UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:?UPSTAGE_API_KEY is required}
       RAG_SIMILARITY_THRESHOLD: ${RAG_SIMILARITY_THRESHOLD:-0.80}
       RAG_TOP_K: ${RAG_TOP_K:-5}
-      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
-      PINECONE_INDEX: ${PINECONE_INDEX:-dahum-malware}
-      UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
-      ALAN_CLIENT_ID: ${ALAN_CLIENT_ID:-}
-      CLOVA_SPEECH_INVOKE_URL: ${CLOVA_SPEECH_INVOKE_URL:-}
-      CLOVA_SPEECH_SECRET: ${CLOVA_SPEECH_SECRET:-}
-      GOOGLE_SAFE_BROWSING_API_KEY: ${GOOGLE_SAFE_BROWSING_API_KEY:-}
-      SAFE_BROWSING_URL: ${SAFE_BROWSING_URL:-https://safebrowsing.googleapis.com/v4/threatMatches:find}
-      FRAUD_HIGH_THRESHOLD: ${FRAUD_HIGH_THRESHOLD:-0.65}
-      FRAUD_MEDIUM_THRESHOLD: ${FRAUD_MEDIUM_THRESHOLD:-0.30}
-      FRAUD_MAX_AUDIO_MB: ${FRAUD_MAX_AUDIO_MB:-25}
-      MALWARE_DATA_DIR: /app/data
-    expose: ["8000"]
-    networks: [dahum_internal]
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1', 8000), 3); s.close()"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+    networks:
+      - dahum_internal
 
   backend:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
@@ -59,32 +57,36 @@ services:
       mariadb:
         condition: service_healthy
       ai:
-        condition: service_started
+        condition: service_healthy
     environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mariadb://mariadb:3306/dahum}
-      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-dahum_app}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
-      AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://yellow.it.kr}
-      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-framework}
-      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
-      CLOVA_OCR_URL: ${CLOVA_OCR_URL:-}
-      CLOVA_OCR_SECRET: ${CLOVA_OCR_SECRET:-}
-      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
-      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
-    expose: ["8080"]
-    networks: [dahum_internal, dahum_web]
+      AI_BASE_URL: ${AI_BASE_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    expose:
+      - "8080"
+    networks:
+      - dahum_internal
+      - dahum_web
 
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
-    depends_on: [backend]
+    depends_on:
+      - backend
     ports:
-      - "${DAHUM_HOST_PORT:-9000}:80"
+      - "${DAHUM_HOST_PORT}:80"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-    networks: [dahum_web]
+    networks:
+      - dahum_web
 
 networks:
   dahum_internal:

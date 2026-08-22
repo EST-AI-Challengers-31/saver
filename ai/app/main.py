@@ -2,25 +2,37 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 
 from app.config import settings
 from app.db import dahum_db
+from app.fraud_db import fraud_db
+from app.fraud_service import fraud_analyzer
 from app.malware_service import malware_service
-from app.schemas import AnalyzeRequest, AnalyzeResponse, ScanDetail, ScanSummary, TextAnalyzeRequest
+from app.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    FraudAnalyzeResponse,
+    FraudTextRequest,
+    ScanDetail,
+    ScanSummary,
+    TextAnalyzeRequest,
+)
+from app.speech_service import SpeechNotConfiguredError, transcribe_audio
 from app.vector_service import vector_search
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     malware_service.load()
+    fraud_db.ensure_schema()
     yield
 
 
 app = FastAPI(
     title="Dahum AI",
-    description="Exact Match HIGH -> Vector MEDIUM -> UNKNOWN",
-    version="2.2.0-python-first",
+    description="Exact Match HIGH -> Vector MEDIUM -> UNKNOWN + fraud signal analysis",
+    version="3.0.0-family-security",
     lifespan=lifespan,
 )
 
@@ -46,6 +58,10 @@ def metadata() -> dict:
         "pinecone_configured": bool(settings.pinecone_api_key),
         "upstage_configured": bool(settings.upstage_api_key),
         "llm_configured": bool(settings.llm_api_key and settings.llm_api_base_url),
+        "clova_speech_configured": bool(
+            settings.clova_speech_invoke_url and settings.clova_speech_secret
+        ),
+        "safe_browsing_configured": bool(settings.safe_browsing_api_key),
     }
 
 
@@ -62,7 +78,6 @@ def _make_response(queries: list[str], source_type: str, source_label: str | Non
     )
 
 
-# Spring Boot가 호출하는 표준 내부 AI API.
 @app.post("/api/v1/analyze/packages", response_model=AnalyzeResponse)
 def analyze_packages(request: AnalyzeRequest) -> AnalyzeResponse:
     return _make_response(
@@ -72,14 +87,12 @@ def analyze_packages(request: AnalyzeRequest) -> AnalyzeResponse:
     )
 
 
-# Python만 단독 테스트할 때 사용하는 텍스트 분석 API.
 @app.post("/api/v1/analyze/text", response_model=AnalyzeResponse)
 def analyze_text(request: TextAnalyzeRequest) -> AnalyzeResponse:
     query = request.query.strip()
     return _make_response([query], "TEXT", query)
 
 
-# 기존 팀 AI의 /analyze 계약을 보존한다.
 @app.post("/analyze")
 def legacy_analyze(request: AnalyzeRequest) -> dict:
     response = _make_response(
@@ -99,6 +112,59 @@ def legacy_analyze(request: AnalyzeRequest) -> dict:
         "similarity_threshold": response.similarity_threshold,
         "vector_provider": response.vector_provider,
     }
+
+
+@app.post("/api/v1/fraud/analyze", response_model=FraudAnalyzeResponse)
+def analyze_fraud_text(request: FraudTextRequest) -> FraudAnalyzeResponse:
+    result = fraud_analyzer.analyze(request.analysis_type, request.text)
+    analysis_id = fraud_db.save(
+        request.requester_user_id,
+        request.analysis_type,
+        "TEXT",
+        request.text,
+        result.model_dump(),
+    )
+    return result.model_copy(update={"analysis_id": analysis_id})
+
+
+@app.post("/api/v1/fraud/voice/audio", response_model=FraudAnalyzeResponse)
+async def analyze_voice_audio(
+    media: UploadFile = File(...),
+    requester_user_id: str | None = Form(default=None),
+) -> FraudAnalyzeResponse:
+    limit = max(1, settings.fraud_max_audio_mb) * 1024 * 1024
+    content = await media.read(limit + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="음성 파일이 비어 있습니다.")
+    if len(content) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"음성 파일은 {settings.fraud_max_audio_mb}MB 이하만 업로드할 수 있습니다.",
+        )
+
+    try:
+        transcript = transcribe_audio(
+            media.filename or "voice-audio",
+            content,
+            media.content_type,
+        )
+    except SpeechNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="음성 인식에 실패했습니다.") from exc
+
+    result = fraud_analyzer.analyze("VOICE_PHISHING", transcript)
+    analysis_id = fraud_db.save(
+        requester_user_id,
+        "VOICE_PHISHING",
+        "AUDIO",
+        transcript,
+        result.model_dump(),
+    )
+    return result.model_copy(update={
+        "analysis_id": analysis_id,
+        "transcript": transcript,
+    })
 
 
 @app.get("/api/scans", response_model=list[ScanSummary])

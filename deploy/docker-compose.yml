@@ -10,8 +10,6 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
     volumes:
-      # v1/v2 데이터는 삭제하지 않고 보존한다.
-      # v3는 현재 GitHub Actions Secrets로 새로 초기화해 과거 DB 비밀번호가 운영 설정을 덮어쓰지 않게 한다.
       - ${DAHUM_RUNTIME}/data/mariadb-python-first-v3:/var/lib/mysql
       - ../db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -43,6 +41,13 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_API_BASE_URL: ${LLM_API_BASE_URL:-}
       ALAN_CLIENT_ID: ${ALAN_CLIENT_ID:-}
+      CLOVA_SPEECH_INVOKE_URL: ${CLOVA_SPEECH_INVOKE_URL:-}
+      CLOVA_SPEECH_SECRET: ${CLOVA_SPEECH_SECRET:-}
+      GOOGLE_SAFE_BROWSING_API_KEY: ${GOOGLE_SAFE_BROWSING_API_KEY:-}
+      SAFE_BROWSING_URL: ${SAFE_BROWSING_URL:-https://safebrowsing.googleapis.com/v4/threatMatches:find}
+      FRAUD_HIGH_THRESHOLD: ${FRAUD_HIGH_THRESHOLD:-0.65}
+      FRAUD_MEDIUM_THRESHOLD: ${FRAUD_MEDIUM_THRESHOLD:-0.30}
+      FRAUD_MAX_AUDIO_MB: ${FRAUD_MAX_AUDIO_MB:-25}
       MALWARE_DATA_DIR: /app/data
     expose: ["8000"]
     networks: [dahum_internal]
@@ -63,6 +68,7 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://yellow.it.kr}
       SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-framework}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       CLOVA_OCR_URL: ${CLOVA_OCR_URL:-}
       CLOVA_OCR_SECRET: ${CLOVA_OCR_SECRET:-}
       KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}

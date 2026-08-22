@@ -41,150 +41,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state='pending' \
             -f context='deploy/yellow.it.kr' \
             -f description='Build and deployment are running' \
             -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-      - name: Hydrate or recover frontend binary assets
+      - name: Hydrate original frontend image assets
         shell: bash
         run: |
           set -euo pipefail
-
-          if command -v git-lfs >/dev/null 2>&1; then
-            git lfs install --local
-            if git lfs pull; then
-              echo 'Git LFS hydration completed.'
-            else
-              echo 'Git LFS hydration was incomplete. Missing PNG assets will be generated locally for this build.'
-            fi
-          else
-            echo 'git-lfs is unavailable. Missing PNG assets will be generated locally for this build.'
-          fi
-
+          git lfs install --local
+          git lfs pull --include="frontend/src/imports/**"
           python3 - <<'PY'
-          from __future__ import annotations
-
-          import struct
-          import zlib
           from pathlib import Path
-
-          POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
-          ROOTS = [Path("frontend/src/imports")]
-
-          def is_lfs_pointer(path: Path) -> bool:
-              try:
-                  return path.read_bytes().startswith(POINTER_PREFIX)
-              except OSError:
-                  return False
-
-          def in_polygon(x: float, y: float, points: list[tuple[float, float]]) -> bool:
-              inside = False
-              j = len(points) - 1
-              for i, (xi, yi) in enumerate(points):
-                  xj, yj = points[j]
-                  if (yi > y) != (yj > y):
-                      cross = (xj - xi) * (y - yi) / ((yj - yi) or 1e-9) + xi
-                      if x < cross:
-                          inside = not inside
-                  j = i
-              return inside
-
-          def make_brand_png(size: int = 256) -> bytes:
-              cx = cy = size / 2
-              rows = []
-              shield = [
-                  (128, 67), (177, 87), (172, 136),
-                  (128, 183), (84, 136), (79, 87),
-              ]
-              heart_triangle = [(96, 113), (160, 113), (128, 153)]
-
-              for y in range(size):
-                  row = bytearray([0])
-                  for x in range(size):
-                      dx = x - cx
-                      dy = y - cy
-                      radius2 = dx * dx + dy * dy
-                      pixel = (0, 0, 0, 0)
-
-                      if radius2 <= 121 * 121:
-                          t = min(1.0, max(0.0, (x + y) / (2 * size)))
-                          r = int(79 + (123 - 79) * t)
-                          g = int(140 + (108 - 140) * t)
-                          b = int(255 + (255 - 255) * t)
-                          pixel = (r, g, b, 255)
-
-                      if radius2 <= 92 * 92:
-                          pixel = (248, 250, 251, 255)
-
-                      if in_polygon(x, y, shield):
-                          pixel = (27, 58, 92, 255)
-
-                      left_heart = (x - 114) ** 2 + (y - 112) ** 2 <= 19 ** 2
-                      right_heart = (x - 142) ** 2 + (y - 112) ** 2 <= 19 ** 2
-                      if left_heart or right_heart or in_polygon(x, y, heart_triangle):
-                          pixel = (255, 255, 255, 255)
-
-                      row.extend(pixel)
-                  rows.append(bytes(row))
-
-              raw = b"".join(rows)
-
-              def chunk(kind: bytes, payload: bytes) -> bytes:
-                  return (
-                      struct.pack(">I", len(payload))
-                      + kind
-                      + payload
-                      + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
-                  )
-
-              return (
-                  b"\x89PNG\r\n\x1a\n"
-                  + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-                  + chunk(b"IDAT", zlib.compress(raw, 9))
-                  + chunk(b"IEND", b"")
+          pointer = b"version https://git-lfs.github.com/spec/v1"
+          root = Path("frontend/src/imports")
+          unresolved = [
+              path.as_posix()
+              for path in root.rglob("*.png")
+              if path.read_bytes().startswith(pointer)
+          ]
+          if unresolved:
+              raise SystemExit(
+                  "Original frontend image assets were not hydrated from Git LFS: "
+                  + ", ".join(unresolved)
               )
-
-          fallback = make_brand_png()
-          replaced = []
-          for root in ROOTS:
-              if not root.exists():
-                  continue
-              for path in root.rglob("*.png"):
-                  if is_lfs_pointer(path):
-                      path.write_bytes(fallback)
-                      replaced.append(path.as_posix())
-
-          if replaced:
-              print("Generated fallback PNG assets for unresolved Git LFS pointers:")
-              for path in replaced:
-                  print(f"  {path}")
-          else:
-              print("All frontend PNG assets are available.")
-
-          unresolved_png = []
-          for root in ROOTS:
-              if not root.exists():
-                  continue
-              unresolved_png.extend(
-                  path.as_posix() for path in root.rglob("*.png") if is_lfs_pointer(path)
-              )
-          if unresolved_png:
-              raise SystemExit("Unresolved frontend PNG pointers remain: " + ", ".join(unresolved_png))
-
-          font_root = Path("frontend/public/fonts")
-          unresolved_fonts = []
-          if font_root.exists():
-              unresolved_fonts = [
-                  path.as_posix() for path in font_root.rglob("*.woff2") if is_lfs_pointer(path)
-              ]
-          if unresolved_fonts:
-              print("WARNING: Pretendard LFS fonts are unavailable; browser font fallback will be used:")
-              for path in unresolved_fonts:
-                  print(f"  {path}")
+          print("Original frontend image assets hydrated without replacement or generated fallback.")
           PY
 
       - name: Set up Node for frontend preflight
@@ -280,6 +163,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: ${{ vars.SPRING_DATASOURCE_USERNAME || 'dahum_app' }}
           SPRING_DATASOURCE_PASSWORD: ${{ secrets.SPRINGDATASOURCEPASSWORD }}
           SERVER_FORWARD_HEADERS_STRATEGY: ${{ vars.SERVER_FORWARD_HEADERS_STRATEGY || 'framework' }}
+          SESSION_COOKIE_SECURE: ${{ vars.SESSION_COOKIE_SECURE || 'true' }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL || 'http://ai:8000' }}
           DAHUM_RUNTIME: ${{ vars.DAHUM_RUNTIME || 'C:/home/dahum/runtime' }}
           DAHUM_HOST_PORT: ${{ vars.DAHUM_HOST_PORT || '9000' }}
@@ -289,6 +173,13 @@ jobs:
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAOCLIENTSECRET }}
           CLOVA_OCR_URL: ${{ vars.CLOVAOCRURL || vars.CLOVA_OCR_URL || '' }}
           CLOVA_OCR_SECRET: ${{ secrets.CLOVA_OCR_SECRET || secrets.CLOVAOCRSECRET || '' }}
+          CLOVA_SPEECH_INVOKE_URL: ${{ vars.CLOVA_SPEECH_INVOKE_URL || vars.CLOVASPEECHINVOKEURL || '' }}
+          CLOVA_SPEECH_SECRET: ${{ secrets.CLOVA_SPEECH_SECRET || secrets.CLOVASPEECHSECRET || '' }}
+          GOOGLE_SAFE_BROWSING_API_KEY: ${{ secrets.GOOGLE_SAFE_BROWSING_API_KEY || secrets.GOOGLESAFEBROWSINGAPIKEY || '' }}
+          SAFE_BROWSING_URL: ${{ vars.SAFE_BROWSING_URL || 'https://safebrowsing.googleapis.com/v4/threatMatches:find' }}
+          FRAUD_HIGH_THRESHOLD: ${{ vars.FRAUD_HIGH_THRESHOLD || '0.65' }}
+          FRAUD_MEDIUM_THRESHOLD: ${{ vars.FRAUD_MEDIUM_THRESHOLD || '0.30' }}
+          FRAUD_MAX_AUDIO_MB: ${{ vars.FRAUD_MAX_AUDIO_MB || '25' }}
           VECTOR_PROVIDER: ${{ vars.VECTORPROVIDER || vars.VECTOR_PROVIDER || 'local' }}
           RAG_SIMILARITY_THRESHOLD: ${{ vars.RAGSIMILARITYTHRESHOLD || vars.RAG_SIMILARITY_THRESHOLD || '0.80' }}
           RAG_TOP_K: ${{ vars.RAGTOPK || vars.RAG_TOP_K || '5' }}
@@ -302,7 +193,16 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import base64, json, os
-          keys = ["MARIADB_IMAGE","MARIADB_DATABASE","MARIADB_USER","MARIADB_PASSWORD","MARIADB_ROOT_PASSWORD","SPRING_PROFILES_ACTIVE","SPRING_DATASOURCE_URL","SPRING_DATASOURCE_USERNAME","SPRING_DATASOURCE_PASSWORD","SERVER_FORWARD_HEADERS_STRATEGY","AI_BASE_URL","DAHUM_RUNTIME","DAHUM_HOST_PORT","PUBLIC_DOMAIN","PUBLIC_BASE_URL","KAKAO_CLIENT_ID","KAKAO_CLIENT_SECRET","CLOVA_OCR_URL","CLOVA_OCR_SECRET","VECTOR_PROVIDER","RAG_SIMILARITY_THRESHOLD","RAG_TOP_K","PINECONE_API_KEY","PINECONE_INDEX","UPSTAGE_API_KEY","LLM_API_KEY","LLM_API_BASE_URL","ALAN_CLIENT_ID"]
+          keys = [
+              "MARIADB_IMAGE","MARIADB_DATABASE","MARIADB_USER","MARIADB_PASSWORD","MARIADB_ROOT_PASSWORD",
+              "SPRING_PROFILES_ACTIVE","SPRING_DATASOURCE_URL","SPRING_DATASOURCE_USERNAME","SPRING_DATASOURCE_PASSWORD",
+              "SERVER_FORWARD_HEADERS_STRATEGY","SESSION_COOKIE_SECURE","AI_BASE_URL","DAHUM_RUNTIME","DAHUM_HOST_PORT",
+              "PUBLIC_DOMAIN","PUBLIC_BASE_URL","KAKAO_CLIENT_ID","KAKAO_CLIENT_SECRET","CLOVA_OCR_URL","CLOVA_OCR_SECRET",
+              "CLOVA_SPEECH_INVOKE_URL","CLOVA_SPEECH_SECRET","GOOGLE_SAFE_BROWSING_API_KEY","SAFE_BROWSING_URL",
+              "FRAUD_HIGH_THRESHOLD","FRAUD_MEDIUM_THRESHOLD","FRAUD_MAX_AUDIO_MB","VECTOR_PROVIDER",
+              "RAG_SIMILARITY_THRESHOLD","RAG_TOP_K","PINECONE_API_KEY","PINECONE_INDEX","UPSTAGE_API_KEY",
+              "LLM_API_KEY","LLM_API_BASE_URL","ALAN_CLIENT_ID"
+          ]
           config = {key: os.environ.get(key, "") for key in keys}
           encoded = base64.b64encode(json.dumps(config, ensure_ascii=False, separators=(",", ":")).encode()).decode()
           print(f"::add-mask::{encoded}")
@@ -339,10 +239,7 @@ jobs:
             sleep 5
           done
           echo "Public route verification failed: $PUBLIC_URL"
-          if [[ -f /tmp/dahum-public.html ]]; then
-            head -c 800 /tmp/dahum-public.html || true
-            echo
-          fi
+          if [[ -f /tmp/dahum-public.html ]]; then head -c 800 /tmp/dahum-public.html || true; echo; fi
           exit 1
 
       - name: Publish deployment result status
@@ -354,23 +251,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$JOB_STATUS" in
-            success)
-              state='success'
-              description='Production deployment succeeded'
-              ;;
-            cancelled)
-              state='error'
-              description='Production deployment was cancelled'
-              ;;
-            *)
-              state='failure'
-              description='Build or production deployment failed'
-              ;;
+            success) state='success'; description='Production deployment succeeded' ;;
+            cancelled) state='error'; description='Production deployment was cancelled' ;;
+            *) state='failure'; description='Build or production deployment failed' ;;
           esac
-
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
             -f context='deploy/yellow.it.kr' \
             -f description="$description" \

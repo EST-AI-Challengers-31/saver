@@ -3,8 +3,11 @@ package com.dahum.controller;
 import com.dahum.dto.AnalyzeResponseDto;
 import com.dahum.service.AiAnalyzeService;
 import com.dahum.service.ClovaOcrService;
+import com.dahum.service.FamilyService;
 import com.dahum.util.PackageNameExtractor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,14 +31,23 @@ public class AnalyzeController {
 
     private final ClovaOcrService clovaOcrService;
     private final AiAnalyzeService aiAnalyzeService;
+    private final FamilyService familyService;
 
-    public AnalyzeController(ClovaOcrService clovaOcrService, AiAnalyzeService aiAnalyzeService) {
+    public AnalyzeController(
+            ClovaOcrService clovaOcrService,
+            AiAnalyzeService aiAnalyzeService,
+            FamilyService familyService
+    ) {
         this.clovaOcrService = clovaOcrService;
         this.aiAnalyzeService = aiAnalyzeService;
+        this.familyService = familyService;
     }
 
     @PostMapping
-    public AnalyzeResponseDto analyze(@RequestParam("image") MultipartFile image) {
+    public AnalyzeResponseDto analyze(
+            @RequestParam("image") MultipartFile image,
+            Authentication authentication
+    ) {
         if (image == null || image.isEmpty()) {
             throw new BadAnalyzeRequestException("분석할 이미지가 비어 있습니다.");
         }
@@ -66,11 +78,16 @@ public class AnalyzeController {
         String sourceLabel = image.getOriginalFilename() == null
                 ? "uploaded-image"
                 : image.getOriginalFilename();
-        return aiAnalyzeService.analyze(queries, "IMAGE_OCR", sourceLabel);
+        AnalyzeResponseDto response = aiAnalyzeService.analyze(queries, "IMAGE_OCR", sourceLabel);
+        familyService.notifyAppRisk(authenticatedUserId(authentication), response);
+        return response;
     }
 
     @PostMapping("/text")
-    public AnalyzeResponseDto analyzeText(@RequestBody Map<String, String> body) {
+    public AnalyzeResponseDto analyzeText(
+            @RequestBody Map<String, String> body,
+            Authentication authentication
+    ) {
         String query = body.getOrDefault("query", "").trim();
         if (query.isBlank()) {
             throw new BadAnalyzeRequestException("앱 이름 또는 패키지명을 입력해 주세요.");
@@ -78,7 +95,18 @@ public class AnalyzeController {
         if (query.length() > 300) {
             throw new BadAnalyzeRequestException("입력값은 300자 이하로 입력해 주세요.");
         }
-        return aiAnalyzeService.analyze(List.of(query), "TEXT", query);
+        AnalyzeResponseDto response = aiAnalyzeService.analyze(List.of(query), "TEXT", query);
+        familyService.notifyAppRisk(authenticatedUserId(authentication), response);
+        return response;
+    }
+
+    private static String authenticatedUserId(Authentication authentication) {
+        if (authentication == null
+                || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
+            return null;
+        }
+        return authentication.getName();
     }
 
     private static List<String> normalizeQueries(List<String> values) {

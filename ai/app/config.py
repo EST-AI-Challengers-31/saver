@@ -42,28 +42,33 @@ class Settings:
     api_host: str = os.getenv("AI_HOST", "0.0.0.0")
     api_port: int = env_int("AI_PORT", 8000)
 
-    # MariaDB: saver의 기존 일반 서비스 DB를 사용한다.
     mariadb_host: str = os.getenv("MARIADB_HOST", "mariadb")
     mariadb_port: int = env_int("MARIADB_PORT", 3306)
     mariadb_database: str = os.getenv("MARIADB_DATABASE", "dahum")
     mariadb_user: str = os.getenv("MARIADB_USER", "dahum_app")
     mariadb_password: str = env_value("MARIADB_PASSWORD")
 
-    # 현재 Python-first LLM 경로. endpoint가 없으면 템플릿 fallback을 사용한다.
     llm_api_key: str = env_value("LLM_API_KEY")
     llm_api_base_url: str = env_value("LLM_API_BASE_URL")
-
-    # 기존 저장소/Secrets와의 호환을 위해 Alan Client ID도 전달받는다.
-    # 현재 위험도 판정 로직의 필수값은 아니며, 설정되지 않아도 배포를 막지 않는다.
     alan_client_id: str = env_value("ALAN_CLIENT_ID")
 
-    # Vector 검색
     vector_provider: str = os.getenv("VECTOR_PROVIDER", "local").strip().lower()
     pinecone_api_key: str = env_value("PINECONE_API_KEY")
     pinecone_index: str = env_value("PINECONE_INDEX", "dahum-malware") or "dahum-malware"
     upstage_api_key: str = env_value("UPSTAGE_API_KEY")
     similarity_threshold: float = env_float("RAG_SIMILARITY_THRESHOLD", 0.80)
     top_k: int = env_int("RAG_TOP_K", 5)
+
+    clova_speech_invoke_url: str = env_value("CLOVA_SPEECH_INVOKE_URL")
+    clova_speech_secret: str = env_value("CLOVA_SPEECH_SECRET")
+    safe_browsing_api_key: str = env_value("GOOGLE_SAFE_BROWSING_API_KEY")
+    safe_browsing_url: str = env_value(
+        "SAFE_BROWSING_URL",
+        "https://safebrowsing.googleapis.com/v4/threatMatches:find",
+    ) or "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+    fraud_high_threshold: float = env_float("FRAUD_HIGH_THRESHOLD", 0.65)
+    fraud_medium_threshold: float = env_float("FRAUD_MEDIUM_THRESHOLD", 0.30)
+    fraud_max_audio_mb: int = env_int("FRAUD_MAX_AUDIO_MB", 25)
 
     data_dir: Path = Path(os.getenv("MALWARE_DATA_DIR", "/app/data"))
 

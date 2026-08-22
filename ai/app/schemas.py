@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -9,6 +9,7 @@ RiskLevel = Literal["HIGH", "MEDIUM", "UNKNOWN"]
 MatchType = Literal["EXACT", "VECTOR", "NONE"]
 ExactField = Literal["PACKAGE", "MALWARE_NAME"]
 ExplanationMethod = Literal["LLM", "TEMPLATE"]
+FraudAnalysisType = Literal["SMISHING", "VOICE_PHISHING", "FINANCIAL_FRAUD"]
 
 
 class AnalyzeRequest(BaseModel):
@@ -91,3 +92,30 @@ class ScanDetail(BaseModel):
     highest_risk_level: RiskLevel
     created_at: datetime | str
     results: list[AppResult] = Field(default_factory=list)
+
+
+class FraudTextRequest(BaseModel):
+    analysis_type: FraudAnalysisType
+    text: str = Field(min_length=1, max_length=20_000)
+    requester_user_id: str | None = Field(default=None, max_length=36)
+
+
+class FraudIndicator(BaseModel):
+    code: str
+    category: str
+    evidence: str
+    weight: float
+
+
+class FraudAnalyzeResponse(BaseModel):
+    analysis_id: str | None = None
+    analysis_type: FraudAnalysisType
+    risk_level: RiskLevel
+    risk_score: float
+    indicators: list[FraudIndicator] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    transcript: str | None = None
+    child_message: str
+    parent_message: str
+    recommended_actions: list[str] = Field(default_factory=list)
+    external_checks: dict[str, Any] = Field(default_factory=dict)

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/deploy-services.yml"
+      - ".ops-trigger/service.txt"
   workflow_dispatch:
     inputs:
       service:
@@ -43,6 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'group: dahum-production' .github/workflows/deploy-services.yml
+          grep -q '.ops-trigger/service.txt' .github/workflows/deploy-services.yml
           grep -q 'repository: chl4890620123-collab/Server' .github/workflows/deploy-services.yml
           grep -q 'SERVER_SSH_KEY' .github/workflows/deploy-services.yml
           grep -q 'deploy-aitm.ps1' .github/workflows/deploy-services.yml
@@ -50,7 +52,7 @@ jobs:
           grep -q 'run-maple-deploy.ps1' .github/workflows/deploy-services.yml
 
   deploy:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[deploy-service]')
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -72,6 +74,13 @@ jobs:
               *) echo "Unknown deployment schedule" >&2; exit 1 ;;
             esac
             force=false
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            if [ ! -f .ops-trigger/service.txt ]; then
+              echo "Push deployment trigger file is missing." >&2
+              exit 1
+            fi
+            service="$(tr -d '[:space:]' < .ops-trigger/service.txt)"
+            force=true
           else
             service="${{ inputs.service }}"
             force="${{ inputs.force }}"
@@ -81,7 +90,7 @@ jobs:
             aitm)
               repository="chl4890620123-collab/Aitm"
               local_url="http://127.0.0.1:9060"
-              health_path="/api/health"
+              health_path="/api/standards"
               ;;
             restok)
               repository="chl4890620123-collab/Restok-Rangchain"

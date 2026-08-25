@@ -1,13 +1,13 @@
-run_id=32901660151
+run_id=32907160032
 run_attempt=1
-event=schedule
+event=push
 service=maple
 source_sha=eb10b869a0a0ba0716bca709fae33f20ea732796
 server_sha=03dc82945ac015633b695cdc27c889982c04f9f4
 source_changed=true
 server_changed=true
-image_bundle=true
-image_registry=false
+image_bundle=false
+image_registry=true
 ssh_available=true
 build=success
 ssh_connection=attempted

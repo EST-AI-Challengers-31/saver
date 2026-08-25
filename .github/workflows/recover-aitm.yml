@@ -211,12 +211,12 @@ jobs:
           if (-not \$?) { throw 'Aitm deploy script failed' }
           PWSH
 
-          encoded="$(iconv -f UTF-8 -t UTF-16LE "$RUNNER_TEMP/aitm-recovery.ps1" | base64 -w0)"
-          remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
           output_file="$RUNNER_TEMP/aitm-recovery-output.txt"
-
           set +e
-          "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" 2>&1 | tee "$output_file"
+          "${auth[@]}" -p "$port" "${ssh_options[@]}" \
+            "$SERVER_USER@$SERVER_HOST" \
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -" \
+            < "$RUNNER_TEMP/aitm-recovery.ps1" 2>&1 | tee "$output_file"
           code=${PIPESTATUS[0]}
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"

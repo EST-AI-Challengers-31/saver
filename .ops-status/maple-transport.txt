@@ -1,6 +1,6 @@
-run_id=32908268077
+run_id=32909111288
 run_attempt=1
-event=push
+event=schedule
 service=maple
 source_sha=eb10b869a0a0ba0716bca709fae33f20ea732796
 server_sha=03dc82945ac015633b695cdc27c889982c04f9f4

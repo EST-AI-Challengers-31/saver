@@ -1,4 +1,4 @@
-run_id=32907942401
+run_id=32909709672
 run_attempt=1
 event=schedule
 service=aitm
@@ -8,8 +8,8 @@ source_changed=true
 server_changed=true
 image_bundle=false
 image_registry=true
-ssh_available=true
-build=success
+ssh_available=
+build=cancelled
 ssh_connection=not_attempted
 remote_exit_code=999
-deployment=failure
+deployment=skipped

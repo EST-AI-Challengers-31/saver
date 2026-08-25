@@ -1,4 +1,4 @@
-run_id=32907160032
+run_id=32908268077
 run_attempt=1
 event=push
 service=maple
@@ -10,6 +10,6 @@ image_bundle=false
 image_registry=true
 ssh_available=true
 build=success
-ssh_connection=attempted
-remote_exit_code=1
+ssh_connection=not_attempted
+remote_exit_code=999
 deployment=failure

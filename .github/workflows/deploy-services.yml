@@ -12,7 +12,7 @@ on:
           - restok
           - maple
       force:
-        description: Force rebuild/redeploy when supported
+        description: Force redeploy even when source and operations revisions are unchanged
         required: false
         default: false
         type: boolean
@@ -24,8 +24,10 @@ on:
 permissions:
   contents: write
 
+# The existing Dahum deployment uses the same group. This serializes every
+# SSH mutation of the Windows mini PC inside the saver repository.
 concurrency:
-  group: saver-production-ssh-gateway
+  group: dahum-production
   cancel-in-progress: false
 
 jobs:
@@ -50,26 +52,25 @@ jobs:
               "12,27,42,57 * * * *") service=restok ;;
               *) echo "Unknown deployment schedule" >&2; exit 1 ;;
             esac
+            force=false
           else
             service="${{ inputs.service }}"
+            force="${{ inputs.force }}"
           fi
 
           case "$service" in
             aitm)
               repository="chl4890620123-collab/Aitm"
-              source_dir="service-source"
               local_url="http://127.0.0.1:9060"
               health_path="/api/health"
               ;;
             restok)
               repository="chl4890620123-collab/Restok-Rangchain"
-              source_dir="service-source"
               local_url="http://127.0.0.1:9050"
               health_path="/api/auth/health"
               ;;
             maple)
               repository="chl4890620123-collab/maple"
-              source_dir="service-source"
               local_url="http://127.0.0.1:9040"
               health_path="/api/meister/meta"
               ;;
@@ -81,9 +82,9 @@ jobs:
 
           echo "service=$service" >> "$GITHUB_OUTPUT"
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
-          echo "source_dir=$source_dir" >> "$GITHUB_OUTPUT"
           echo "local_url=$local_url" >> "$GITHUB_OUTPUT"
           echo "health_path=$health_path" >> "$GITHUB_OUTPUT"
+          echo "force=$force" >> "$GITHUB_OUTPUT"
 
       - name: Checkout Server operations repository
         uses: actions/checkout@v5
@@ -104,39 +105,49 @@ jobs:
         shell: bash
         env:
           SERVICE: ${{ steps.target.outputs.service }}
+          FORCE_REQUESTED: ${{ steps.target.outputs.force }}
         run: |
           set -euo pipefail
+
           source_sha="$(git -C service-source rev-parse HEAD)"
           server_sha="$(git -C server-source rev-parse HEAD)"
           status_file=".ops-status/${SERVICE}.txt"
-          deployed_sha="$(sed -n 's/^source_sha=//p' "$status_file" 2>/dev/null | head -n 1 || true)"
+          deployed_source_sha="$(sed -n 's/^source_sha=//p' "$status_file" 2>/dev/null | head -n 1 || true)"
+          deployed_server_sha="$(sed -n 's/^server_sha=//p' "$status_file" 2>/dev/null | head -n 1 || true)"
 
-          force=false
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "$SERVICE" = "restok" ] || [ "$SERVICE" = "maple" ] || [ "${{ inputs.force }}" = "true" ]; then
-              force=true
-            fi
-          fi
+          source_changed=false
+          server_changed=false
+          [ "$deployed_source_sha" = "$source_sha" ] || source_changed=true
+          [ "$deployed_server_sha" = "$server_sha" ] || server_changed=true
 
           bundle=false
-          if [ "$SERVICE" != "maple" ]; then
-            if [ "$force" = true ] || [ -z "$deployed_sha" ] || [ "$deployed_sha" != "$source_sha" ]; then
-              bundle=true
-            fi
+          if [ "$FORCE_REQUESTED" = "true" ] || [ "$source_changed" = "true" ] || [ "$server_changed" = "true" ]; then
+            bundle=true
+          fi
+
+          force_deploy=false
+          if [ "$FORCE_REQUESTED" = "true" ] || [ "$server_changed" = "true" ]; then
+            force_deploy=true
           fi
 
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "server_sha=$server_sha" >> "$GITHUB_OUTPUT"
-          echo "deployed_sha=$deployed_sha" >> "$GITHUB_OUTPUT"
-          echo "force=$force" >> "$GITHUB_OUTPUT"
+          echo "deployed_source_sha=$deployed_source_sha" >> "$GITHUB_OUTPUT"
+          echo "deployed_server_sha=$deployed_server_sha" >> "$GITHUB_OUTPUT"
+          echo "source_changed=$source_changed" >> "$GITHUB_OUTPUT"
+          echo "server_changed=$server_changed" >> "$GITHUB_OUTPUT"
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "force_deploy=$force_deploy" >> "$GITHUB_OUTPUT"
 
           echo "Service: $SERVICE"
           echo "Source SHA: $source_sha"
           echo "Server ops SHA: $server_sha"
-          echo "Previously deployed source SHA: ${deployed_sha:-none}"
-          echo "Force: $force"
+          echo "Previous source SHA: ${deployed_source_sha:-none}"
+          echo "Previous Server SHA: ${deployed_server_sha:-none}"
+          echo "Source changed: $source_changed"
+          echo "Server operations changed: $server_changed"
           echo "Build image bundle: $bundle"
+          echo "Force operations apply: $force_deploy"
 
       - name: Build exact image bundle on GitHub runner
         id: build
@@ -180,8 +191,18 @@ jobs:
                 caddy:2.10-alpine \
                 | gzip -1 > "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
               ;;
+            maple)
+              docker build --pull -t maple-production-app:latest service-source
+              docker pull mariadb:11.4
+              docker pull caddy:2.10-alpine
+              docker save \
+                maple-production-app:latest \
+                mariadb:11.4 \
+                caddy:2.10-alpine \
+                | gzip -1 > "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              ;;
             *)
-              echo "No runner image bundle is defined for $SERVICE" >&2
+              echo "Unsupported service: $SERVICE" >&2
               exit 1
               ;;
           esac
@@ -273,7 +294,7 @@ jobs:
           $service = '${{ steps.target.outputs.service }}'
           $expectedSourceSha = '${{ steps.plan.outputs.source_sha }}'
           $expectedServerSha = '${{ steps.plan.outputs.server_sha }}'
-          $forceDeploy = '${{ steps.plan.outputs.force }}' -eq 'true'
+          $forceDeploy = '${{ steps.plan.outputs.force_deploy }}' -eq 'true'
           $bundleExpected = '${{ steps.plan.outputs.bundle }}' -eq 'true'
 
           $serverPath = 'C:\home\server\app'
@@ -393,12 +414,12 @@ jobs:
               if [ -n "$public_url" ] && [ "$deployed_source_sha" = '${{ steps.plan.outputs.source_sha }}' ]; then
                 final=success
                 cat > ".ops-status/${SERVICE}.txt" <<EOF
-          source_sha=${{ steps.plan.outputs.source_sha }}
-          server_sha=${{ steps.plan.outputs.server_sha }}
-          public_url=$public_url
-          public_health=$public_url${{ steps.target.outputs.health_path }}
-          local_url=${{ steps.target.outputs.local_url }}
-          EOF
+source_sha=${{ steps.plan.outputs.source_sha }}
+server_sha=${{ steps.plan.outputs.server_sha }}
+public_url=$public_url
+public_health=$public_url${{ steps.target.outputs.health_path }}
+local_url=${{ steps.target.outputs.local_url }}
+EOF
               fi
             fi
           elif [ "$remote_outcome" = 'failure' ]; then
@@ -406,19 +427,21 @@ jobs:
           fi
 
           cat > ".ops-status/${SERVICE}-transport.txt" <<EOF
-          run_id=${{ github.run_id }}
-          run_attempt=${{ github.run_attempt }}
-          event=${{ github.event_name }}
-          service=$SERVICE
-          source_sha=${{ steps.plan.outputs.source_sha }}
-          server_sha=${{ steps.plan.outputs.server_sha }}
-          image_bundle=${{ steps.plan.outputs.bundle }}
-          ssh_available=$available
-          build=$build_outcome
-          ssh_connection=$connection
-          remote_exit_code=$exit_code
-          deployment=$final
-          EOF
+run_id=${{ github.run_id }}
+run_attempt=${{ github.run_attempt }}
+event=${{ github.event_name }}
+service=$SERVICE
+source_sha=${{ steps.plan.outputs.source_sha }}
+server_sha=${{ steps.plan.outputs.server_sha }}
+source_changed=${{ steps.plan.outputs.source_changed }}
+server_changed=${{ steps.plan.outputs.server_changed }}
+image_bundle=${{ steps.plan.outputs.bundle }}
+ssh_available=$available
+build=$build_outcome
+ssh_connection=$connection
+remote_exit_code=$exit_code
+deployment=$final
+EOF
           echo "final=$final" >> "$GITHUB_OUTPUT"
 
           tmpdir="$(mktemp -d)"

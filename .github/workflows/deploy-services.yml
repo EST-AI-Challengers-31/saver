@@ -348,7 +348,10 @@ jobs:
                       Write-Host "[$service] pulling $($entry.Key)"
                       docker pull $entry.Key
                       if ($LASTEXITCODE -ne 0) { throw "GHCR pull failed: $($entry.Key)" }
-                      $revision = (docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' $entry.Key | Out-String).Trim()
+                      $inspectJson = docker image inspect $entry.Key | Out-String
+                      if ($LASTEXITCODE -ne 0) { throw "Image inspect failed: $($entry.Key)" }
+                      $inspectData = $inspectJson | ConvertFrom-Json
+                      $revision = [string]$inspectData[0].Config.Labels.'org.opencontainers.image.revision'
                       if ($revision -ne $expectedSourceSha) { throw "Image revision mismatch: expected=$expectedSourceSha actual=$revision" }
                       docker tag $entry.Key $entry.Value
                       if ($LASTEXITCODE -ne 0) { throw "Image tag failed: $($entry.Value)" }

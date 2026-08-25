@@ -1,0 +1,14 @@
+run_id=32824215385
+run_attempt=1
+event=push
+service=aitm
+source_sha=63038608003b3235bc1149ca5692a401becc700a
+server_sha=5437ecbe364a36ca8faf7a4b6600dddbb2f819d0
+source_changed=true
+server_changed=true
+image_bundle=true
+ssh_available=true
+build=success
+ssh_connection=not_attempted
+remote_exit_code=999
+deployment=failure

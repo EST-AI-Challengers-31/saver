@@ -28,6 +28,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: dahum-production
@@ -44,9 +45,12 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'group: dahum-production' .github/workflows/deploy-services.yml
+          grep -q 'packages: write' .github/workflows/deploy-services.yml
           grep -q '.ops-trigger/service.txt' .github/workflows/deploy-services.yml
           grep -q 'repository: chl4890620123-collab/Server' .github/workflows/deploy-services.yml
           grep -q 'SERVER_SSH_KEY' .github/workflows/deploy-services.yml
+          grep -q 'ghcr.io' .github/workflows/deploy-services.yml
+          grep -q 'org.opencontainers.image.revision' .github/workflows/deploy-services.yml
           grep -q 'deploy-aitm.ps1' .github/workflows/deploy-services.yml
           grep -q 'deploy-restok.ps1' .github/workflows/deploy-services.yml
           grep -q 'run-maple-deploy.ps1' .github/workflows/deploy-services.yml
@@ -90,17 +94,17 @@ jobs:
             aitm)
               repository="chl4890620123-collab/Aitm"
               local_url="http://127.0.0.1:9060"
-              health_path="/api/standards"
+              functional_path="/api/standards"
               ;;
             restok)
               repository="chl4890620123-collab/Restok-Rangchain"
               local_url="http://127.0.0.1:9050"
-              health_path="/api/auth/health"
+              functional_path="/api/auth/health"
               ;;
             maple)
               repository="chl4890620123-collab/maple"
               local_url="http://127.0.0.1:9040"
-              health_path="/api/meister/meta"
+              functional_path="/api/meister/meta"
               ;;
             *)
               echo "Unsupported service: $service" >&2
@@ -111,7 +115,7 @@ jobs:
           echo "service=$service" >> "$GITHUB_OUTPUT"
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
           echo "local_url=$local_url" >> "$GITHUB_OUTPUT"
-          echo "health_path=$health_path" >> "$GITHUB_OUTPUT"
+          echo "functional_path=$functional_path" >> "$GITHUB_OUTPUT"
           echo "force=$force" >> "$GITHUB_OUTPUT"
 
       - name: Checkout Server operations repository
@@ -149,8 +153,18 @@ jobs:
           [ "$deployed_server_sha" = "$server_sha" ] || server_changed=true
 
           bundle=false
-          if [ "$FORCE_REQUESTED" = "true" ] || [ "$source_changed" = "true" ] || [ "$server_changed" = "true" ]; then
+          registry=false
+          if [ "$SERVICE" = "aitm" ]; then
+            if [ "$FORCE_REQUESTED" = "true" ] || [ "$source_changed" = "true" ]; then
+              registry=true
+            fi
+          elif [ "$FORCE_REQUESTED" = "true" ] || [ "$source_changed" = "true" ] || [ "$server_changed" = "true" ]; then
             bundle=true
+          fi
+
+          image_required=false
+          if [ "$bundle" = "true" ] || [ "$registry" = "true" ]; then
+            image_required=true
           fi
 
           force_deploy=false
@@ -165,6 +179,8 @@ jobs:
           echo "source_changed=$source_changed" >> "$GITHUB_OUTPUT"
           echo "server_changed=$server_changed" >> "$GITHUB_OUTPUT"
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "image_required=$image_required" >> "$GITHUB_OUTPUT"
           echo "force_deploy=$force_deploy" >> "$GITHUB_OUTPUT"
 
           echo "Service: $SERVICE"
@@ -174,33 +190,49 @@ jobs:
           echo "Previous Server SHA: ${deployed_server_sha:-none}"
           echo "Source changed: $source_changed"
           echo "Server operations changed: $server_changed"
-          echo "Build image bundle: $bundle"
+          echo "Build SCP image bundle: $bundle"
+          echo "Publish GHCR images: $registry"
           echo "Force operations apply: $force_deploy"
 
-      - name: Build exact image bundle on GitHub runner
+      - name: Prepare exact deployment images
         id: build
-        if: steps.plan.outputs.bundle == 'true'
+        if: steps.plan.outputs.image_required == 'true'
         shell: bash
         env:
           SERVICE: ${{ steps.target.outputs.service }}
+          SOURCE_SHA: ${{ steps.plan.outputs.source_sha }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
           RESTOK_GOOGLE_OAUTH_ENABLED: ${{ vars.RESTOK_GOOGLE_OAUTH_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
           case "$SERVICE" in
             aitm)
-              docker build --pull -t aitm-production-ai:latest service-source/demo/ai
-              docker build --pull -t aitm-production-backend:latest service-source/demo
-              docker build --pull -t aitm-production-frontend:latest service-source/front
-              docker pull mariadb:10.11
-              docker pull caddy:2.10-alpine
-              docker save \
-                aitm-production-ai:latest \
-                aitm-production-backend:latest \
-                aitm-production-frontend:latest \
-                mariadb:10.11 \
-                caddy:2.10-alpine \
-                | gzip -1 > "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              registry_owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+              registry_base="ghcr.io/${registry_owner}/saver-aitm"
+              ai_ref="${registry_base}-ai:${SOURCE_SHA}"
+              backend_ref="${registry_base}-backend:${SOURCE_SHA}"
+              frontend_ref="${registry_base}-frontend:${SOURCE_SHA}"
+
+              printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+              trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+              docker build --pull \
+                --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+                -t "$ai_ref" service-source/demo/ai
+              docker build --pull \
+                --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+                -t "$backend_ref" service-source/demo
+              docker build --pull \
+                --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+                -t "$frontend_ref" service-source/front
+
+              docker push "$ai_ref"
+              docker push "$backend_ref"
+              docker push "$frontend_ref"
+
+              echo "Published Aitm images by immutable source SHA: $SOURCE_SHA"
               ;;
             restok)
               docker build --pull -t restok-production-ai:latest service-source/ai_server
@@ -218,6 +250,8 @@ jobs:
                 mariadb:11.4 \
                 caddy:2.10-alpine \
                 | gzip -1 > "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              test -s "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              ls -lh "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
               ;;
             maple)
               docker build --pull -t maple-production-app:latest service-source
@@ -228,15 +262,14 @@ jobs:
                 mariadb:11.4 \
                 caddy:2.10-alpine \
                 | gzip -1 > "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              test -s "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
+              ls -lh "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
               ;;
             *)
               echo "Unsupported service: $SERVICE" >&2
               exit 1
               ;;
           esac
-
-          test -s "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
-          ls -lh "$RUNNER_TEMP/${SERVICE}-images.tar.gz"
 
       - name: Detect saver SSH configuration
         id: ssh
@@ -318,12 +351,18 @@ jobs:
 
           cat > "$RUNNER_TEMP/service-remote.ps1" <<'PWSH'
           $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
 
           $service = '${{ steps.target.outputs.service }}'
           $expectedSourceSha = '${{ steps.plan.outputs.source_sha }}'
           $expectedServerSha = '${{ steps.plan.outputs.server_sha }}'
           $forceDeploy = '${{ steps.plan.outputs.force_deploy }}' -eq 'true'
           $bundleExpected = '${{ steps.plan.outputs.bundle }}' -eq 'true'
+          $registryExpected = '${{ steps.plan.outputs.registry }}' -eq 'true'
+          $ghcrUser = '${{ github.actor }}'
+          $ghcrToken = '${{ github.token }}'
+          $registryOwner = '${{ github.repository_owner }}'.ToLowerInvariant()
+          $registryBase = "ghcr.io/$registryOwner/saver-aitm"
 
           $serverPath = 'C:\home\server\app'
           $serverParent = Split-Path $serverPath -Parent
@@ -379,6 +418,63 @@ jobs:
               Remove-Item -Force $bundle
           }
 
+          if ($registryExpected) {
+              if ($service -ne 'aitm') { throw "GHCR staging is only enabled for Aitm." }
+
+              docker version *> $null
+              if ($LASTEXITCODE -ne 0) { throw 'Docker Engine is not available.' }
+
+              $dockerConfigRoot = Join-Path $env:TEMP ("aitm-ghcr-" + [guid]::NewGuid().ToString('N'))
+              $previousDockerConfig = $env:DOCKER_CONFIG
+              try {
+                  New-Item -ItemType Directory -Force -Path $dockerConfigRoot | Out-Null
+                  '{"auths":{}}' | Set-Content -Path (Join-Path $dockerConfigRoot 'config.json') -Encoding ascii
+                  $env:DOCKER_CONFIG = $dockerConfigRoot
+
+                  $ghcrToken | docker login ghcr.io --username $ghcrUser --password-stdin
+                  if ($LASTEXITCODE -ne 0) { throw 'GHCR login failed.' }
+
+                  $imageMap = [ordered]@{
+                      "${registryBase}-ai:${expectedSourceSha}" = 'aitm-production-ai:latest'
+                      "${registryBase}-backend:${expectedSourceSha}" = 'aitm-production-backend:latest'
+                      "${registryBase}-frontend:${expectedSourceSha}" = 'aitm-production-frontend:latest'
+                  }
+
+                  foreach ($entry in $imageMap.GetEnumerator()) {
+                      $remoteImage = $entry.Key
+                      $localImage = $entry.Value
+                      Write-Host "[aitm] pulling GHCR image: $remoteImage"
+                      docker pull $remoteImage
+                      if ($LASTEXITCODE -ne 0) { throw "GHCR pull failed: $remoteImage" }
+
+                      $revision = (docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' $remoteImage | Out-String).Trim()
+                      if ($LASTEXITCODE -ne 0 -or $revision -ne $expectedSourceSha) {
+                          throw "Aitm image revision mismatch: image=$remoteImage expected=$expectedSourceSha actual=$revision"
+                      }
+
+                      docker tag $remoteImage $localImage
+                      if ($LASTEXITCODE -ne 0) { throw "Failed to stage local Aitm image: $localImage" }
+                  }
+
+                  foreach ($runtimeImage in @('mariadb:10.11', 'caddy:2.10-alpine')) {
+                      docker image inspect $runtimeImage *> $null
+                      if ($LASTEXITCODE -ne 0) {
+                          Write-Host "[aitm] pulling missing runtime image: $runtimeImage"
+                          docker pull $runtimeImage
+                          if ($LASTEXITCODE -ne 0) { throw "Required runtime image pull failed: $runtimeImage" }
+                      }
+                  }
+              } finally {
+                  if ([string]::IsNullOrWhiteSpace($previousDockerConfig)) {
+                      Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue
+                  } else {
+                      $env:DOCKER_CONFIG = $previousDockerConfig
+                  }
+                  Remove-Item -Recurse -Force $dockerConfigRoot -ErrorAction SilentlyContinue
+              }
+          }
+
+          Set-Location $serverPath
           switch ($service) {
               'aitm' {
                   & '.\deploy\scripts\deploy-aitm.ps1' -ExpectedSha $expectedSourceSha -Force:$forceDeploy
@@ -397,11 +493,12 @@ jobs:
           }
           PWSH
 
-          encoded="$(iconv -f UTF-8 -t UTF-16LE "$RUNNER_TEMP/service-remote.ps1" | base64 -w0)"
-          remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+          wrapper='$script = [Console]::In.ReadToEnd(); Invoke-Expression $script'
+          encoded_wrapper="$(printf '%s' "$wrapper" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
+          remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_wrapper"
 
           set +e
-          output="$("${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" 2>&1)"
+          output="$("${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" < "$RUNNER_TEMP/service-remote.ps1" 2>&1)"
           code=$?
           set -e
 
@@ -441,13 +538,23 @@ jobs:
               deployed_source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n 1 | awk '{print $4}' || true)"
               if [ -n "$public_url" ] && [ "$deployed_source_sha" = '${{ steps.plan.outputs.source_sha }}' ]; then
                 final=success
-                cat > ".ops-status/${SERVICE}.txt" <<EOF
+                if [ "$SERVICE" = 'aitm' ]; then
+                  cat > ".ops-status/${SERVICE}.txt" <<EOF
           source_sha=${{ steps.plan.outputs.source_sha }}
           server_sha=${{ steps.plan.outputs.server_sha }}
           public_url=$public_url
-          public_health=$public_url${{ steps.target.outputs.health_path }}
+          public_api=$public_url${{ steps.target.outputs.functional_path }}
           local_url=${{ steps.target.outputs.local_url }}
           EOF
+                else
+                  cat > ".ops-status/${SERVICE}.txt" <<EOF
+          source_sha=${{ steps.plan.outputs.source_sha }}
+          server_sha=${{ steps.plan.outputs.server_sha }}
+          public_url=$public_url
+          public_health=$public_url${{ steps.target.outputs.functional_path }}
+          local_url=${{ steps.target.outputs.local_url }}
+          EOF
+                fi
               fi
             fi
           elif [ "$remote_outcome" = 'failure' ]; then
@@ -464,6 +571,7 @@ jobs:
           source_changed=${{ steps.plan.outputs.source_changed }}
           server_changed=${{ steps.plan.outputs.server_changed }}
           image_bundle=${{ steps.plan.outputs.bundle }}
+          image_registry=${{ steps.plan.outputs.registry }}
           ssh_available=$available
           build=$build_outcome
           ssh_connection=$connection

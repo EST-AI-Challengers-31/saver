@@ -40,8 +40,7 @@ jobs:
           for attempt in $(seq 1 30); do
             status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id" --jq '.status')"
             if [ "$status" = "completed" ]; then
-              echo "Run $run_id is completed/cancelled; production lock can be reacquired safely."
-              sleep 10
+              echo "Run $run_id is completed/cancelled."
               exit 0
             fi
             sleep 5
@@ -84,7 +83,7 @@ jobs:
           echo "source_sha=$(git -C service-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "server_sha=$(git -C server-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Aitm by building on the mini PC
+      - name: Deploy Aitm through Server recovery script
         id: remote
         shell: bash
         env:
@@ -132,93 +131,58 @@ jobs:
             -o UserKnownHostsFile=/dev/null
           )
 
-          cat > "$RUNNER_TEMP/aitm-recovery.ps1" <<PWSH
+          cat > "$RUNNER_TEMP/aitm-recovery-entry.ps1" <<PWSH
           \$ErrorActionPreference = 'Stop'
-          \$expectedSourceSha = '$EXPECTED_SOURCE_SHA'
-          \$expectedServerSha = '$EXPECTED_SERVER_SHA'
-          \$serverPath = 'C:\\home\\server\\app'
-          \$sourcePath = 'C:\\home\\server\\source\\aitm'
+          try {
+              \$serverPath = 'C:\\home\\server\\app'
+              New-Item -ItemType Directory -Force -Path (Split-Path \$serverPath -Parent) | Out-Null
 
-          New-Item -ItemType Directory -Force -Path (Split-Path \$serverPath -Parent) | Out-Null
-          New-Item -ItemType Directory -Force -Path (Split-Path \$sourcePath -Parent) | Out-Null
+              if (-not (Test-Path (Join-Path \$serverPath '.git'))) {
+                  if (Test-Path \$serverPath) { Remove-Item -Recurse -Force \$serverPath }
+                  git clone 'https://github.com/chl4890620123-collab/Server.git' \$serverPath
+                  if (\$LASTEXITCODE -ne 0) { throw 'Server clone failed' }
+              }
 
-          if (-not (Test-Path (Join-Path \$serverPath '.git'))) {
-              if (Test-Path \$serverPath) { Remove-Item -Recurse -Force \$serverPath }
-              git clone 'https://github.com/chl4890620123-collab/Server.git' \$serverPath
-              if (\$LASTEXITCODE -ne 0) { throw 'Server clone failed' }
+              Set-Location \$serverPath
+              git reset --hard HEAD
+              if (\$LASTEXITCODE -ne 0) { throw 'Server reset failed' }
+              git clean -fd
+              if (\$LASTEXITCODE -ne 0) { throw 'Server clean failed' }
+              git fetch --prune origin main
+              if (\$LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
+              git checkout -B main origin/main
+              if (\$LASTEXITCODE -ne 0) { throw 'Server checkout failed' }
+              git reset --hard '$EXPECTED_SERVER_SHA'
+              if (\$LASTEXITCODE -ne 0) { throw 'Server exact revision checkout failed' }
+              git clean -fd
+              if (\$LASTEXITCODE -ne 0) { throw 'Server final clean failed' }
+
+              \$actualServerSha = (git rev-parse HEAD | Out-String).Trim()
+              if (\$actualServerSha -ne '$EXPECTED_SERVER_SHA') {
+                  throw "Server SHA mismatch: expected=$EXPECTED_SERVER_SHA actual=\$actualServerSha"
+              }
+
+              & '.\\deploy\\scripts\\recover-aitm.ps1' \
+                  -ExpectedSha '$EXPECTED_SOURCE_SHA' \
+                  -ExpectedServerSha '$EXPECTED_SERVER_SHA'
+          } catch {
+              Write-Error \$_
+              exit 1
           }
-          Set-Location \$serverPath
-          git reset --hard HEAD
-          if (\$LASTEXITCODE -ne 0) { throw 'Server reset failed' }
-          git clean -fd
-          if (\$LASTEXITCODE -ne 0) { throw 'Server clean failed' }
-          git fetch --prune origin main
-          if (\$LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
-          git checkout -B main origin/main
-          if (\$LASTEXITCODE -ne 0) { throw 'Server checkout failed' }
-          git reset --hard \$expectedServerSha
-          if (\$LASTEXITCODE -ne 0) { throw 'Server exact revision checkout failed' }
-          git clean -fd
-          if (\$LASTEXITCODE -ne 0) { throw 'Server final clean failed' }
-          \$actualServerSha = (git rev-parse HEAD | Out-String).Trim()
-          if (\$actualServerSha -ne \$expectedServerSha) { throw "Server SHA mismatch: expected=\$expectedServerSha actual=\$actualServerSha" }
-
-          if (-not (Test-Path (Join-Path \$sourcePath '.git'))) {
-              if (Test-Path \$sourcePath) { Remove-Item -Recurse -Force \$sourcePath }
-              git clone 'https://github.com/chl4890620123-collab/Aitm.git' \$sourcePath
-              if (\$LASTEXITCODE -ne 0) { throw 'Aitm clone failed' }
-          }
-          Set-Location \$sourcePath
-          git reset --hard HEAD
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm reset failed' }
-          git clean -fd
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm clean failed' }
-          git fetch --prune origin main
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm fetch failed' }
-          git checkout -B main origin/main
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm checkout failed' }
-          git reset --hard \$expectedSourceSha
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm exact revision checkout failed' }
-          git clean -fd
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm final clean failed' }
-          \$actualSourceSha = (git rev-parse HEAD | Out-String).Trim()
-          if (\$actualSourceSha -ne \$expectedSourceSha) { throw "Aitm SHA mismatch: expected=\$expectedSourceSha actual=\$actualSourceSha" }
-
-          docker version *> \$null
-          if (\$LASTEXITCODE -ne 0) { throw 'Docker Engine is not available' }
-          docker compose version *> \$null
-          if (\$LASTEXITCODE -ne 0) { throw 'Docker Compose is not available' }
-
-          Write-Host '[aitm-recovery] building AI image on mini PC'
-          docker build --pull -t aitm-production-ai:latest (Join-Path \$sourcePath 'demo\\ai')
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm AI image build failed' }
-
-          Write-Host '[aitm-recovery] building backend image on mini PC'
-          docker build --pull -t aitm-production-backend:latest (Join-Path \$sourcePath 'demo')
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm backend image build failed' }
-
-          Write-Host '[aitm-recovery] building frontend image on mini PC'
-          docker build --pull -t aitm-production-frontend:latest (Join-Path \$sourcePath 'front')
-          if (\$LASTEXITCODE -ne 0) { throw 'Aitm frontend image build failed' }
-
-          docker pull mariadb:10.11
-          if (\$LASTEXITCODE -ne 0) { throw 'MariaDB runtime image pull failed' }
-          docker pull caddy:2.10-alpine
-          if (\$LASTEXITCODE -ne 0) { throw 'Caddy runtime image pull failed' }
-
-          Set-Location \$serverPath
-          & '.\\deploy\\scripts\\deploy-aitm.ps1' -ExpectedSha \$expectedSourceSha -Force
-          if (-not \$?) { throw 'Aitm deploy script failed' }
           PWSH
 
+          wrapper='$script = [Console]::In.ReadToEnd(); Invoke-Expression $script'
+          encoded_wrapper="$(printf '%s' "$wrapper" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
           output_file="$RUNNER_TEMP/aitm-recovery-output.txt"
+
           set +e
           "${auth[@]}" -p "$port" "${ssh_options[@]}" \
             "$SERVER_USER@$SERVER_HOST" \
-            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -" \
-            < "$RUNNER_TEMP/aitm-recovery.ps1" 2>&1 | tee "$output_file"
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_wrapper" \
+            < "$RUNNER_TEMP/aitm-recovery-entry.ps1" 2>&1 | tee "$output_file"
           code=${PIPESTATUS[0]}
           set -e
+
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" -ne 0 ]; then
             exit "$code"
@@ -299,6 +263,7 @@ jobs:
             fi
             sleep $((attempt * 2))
           done
+
           rm -rf "$tmpdir"
           if [ "$published" != 'true' ]; then
             echo 'Failed to publish Aitm recovery status.' >&2

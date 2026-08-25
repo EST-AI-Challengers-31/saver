@@ -28,7 +28,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: dahum-production
+  group: dahum-production-${{ inputs.service || (github.event.schedule == '2,17,32,47 * * * *' && 'maple') || (github.event.schedule == '7,22,37,52 * * * *' && 'aitm') || (github.event.schedule == '12,27,42,57 * * * *' && 'restok') || (contains(github.event.head_commit.message, 'aitm') && 'aitm') || (contains(github.event.head_commit.message, 'restok') && 'restok') || 'maple' }}
   cancel-in-progress: true
 
 jobs:
@@ -41,7 +41,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'group: dahum-production' .github/workflows/deploy-services.yml
+          grep -q 'group: dahum-production-' .github/workflows/deploy-services.yml
+          grep -q "github.event.schedule == '2,17,32,47 \* \* \* \*'" .github/workflows/deploy-services.yml
+          grep -q "github.event.schedule == '7,22,37,52 \* \* \* \*'" .github/workflows/deploy-services.yml
+          grep -q "github.event.schedule == '12,27,42,57 \* \* \* \*'" .github/workflows/deploy-services.yml
           grep -q 'cancel-in-progress: true' .github/workflows/deploy-services.yml
           grep -q 'packages: write' .github/workflows/deploy-services.yml
           grep -q '.ops-trigger/service.txt' .github/workflows/deploy-services.yml

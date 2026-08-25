@@ -1,6 +1,6 @@
-run_id=32855252957
+run_id=32856770297
 run_attempt=1
-event=push
+event=schedule
 service=aitm
 source_sha=d5d466abc2ba536ad9067a994f086dd8341a7e83
 server_sha=ae10c6d9cac616a9b533c505c05edb68e8e1ce93
@@ -11,5 +11,5 @@ image_registry=true
 ssh_available=true
 build=success
 ssh_connection=attempted
-remote_exit_code=1
+remote_exit_code=255
 deployment=failure

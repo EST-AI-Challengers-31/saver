@@ -1,0 +1,306 @@
+name: Recover Aitm production deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".ops-trigger/aitm-recovery.txt"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cancel-stuck-run:
+    runs-on: ubuntu-latest
+    outputs:
+      cancelled_run: ${{ steps.cancel.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cancel explicitly selected stuck deployment
+        id: cancel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$(sed -n 's/^cancel_run=//p' .ops-trigger/aitm-recovery.txt | head -n 1 | tr -d '[:space:]')"
+          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "Invalid or missing cancel_run in .ops-trigger/aitm-recovery.txt" >&2
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id" --jq '.status')"
+          if [ "$status" != "completed" ]; then
+            echo "Cancelling stuck deployment run $run_id (status=$status)"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id/cancel" >/dev/null
+          fi
+
+          for attempt in $(seq 1 30); do
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id" --jq '.status')"
+            if [ "$status" = "completed" ]; then
+              echo "Run $run_id is completed/cancelled; production lock can be reacquired safely."
+              sleep 10
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for run $run_id to stop." >&2
+          exit 1
+
+  recover:
+    needs: cancel-stuck-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: dahum-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout saver gateway
+        uses: actions/checkout@v5
+
+      - name: Checkout Server operations repository
+        uses: actions/checkout@v5
+        with:
+          repository: chl4890620123-collab/Server
+          ref: main
+          path: server-source
+
+      - name: Checkout Aitm source
+        uses: actions/checkout@v5
+        with:
+          repository: chl4890620123-collab/Aitm
+          ref: main
+          path: service-source
+
+      - name: Resolve exact revisions
+        id: revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "source_sha=$(git -C service-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "server_sha=$(git -C server-source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Aitm by building on the mini PC
+        id: remote
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          EXPECTED_SOURCE_SHA: ${{ steps.revisions.outputs.source_sha }}
+          EXPECTED_SERVER_SHA: ${{ steps.revisions.outputs.server_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || { [ -z "$SERVER_SSH_KEY" ] && [ -z "$SERVER_PASSWORD" ]; }; then
+            echo "Saver SSH configuration is incomplete." >&2
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          port="${SERVER_PORT:-22}"
+          key_args=()
+
+          if [ -n "$SERVER_SSH_KEY" ]; then
+            printf '%s\n' "$SERVER_SSH_KEY" > "$HOME/.ssh/saver_recovery_key"
+            chmod 600 "$HOME/.ssh/saver_recovery_key"
+            key_args=(-i "$HOME/.ssh/saver_recovery_key")
+          fi
+
+          if [ -n "$SERVER_PASSWORD" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+            export SSHPASS="$SERVER_PASSWORD"
+            auth=(sshpass -e ssh "${key_args[@]}")
+          else
+            auth=(ssh "${key_args[@]}")
+          fi
+
+          ssh_options=(
+            -o BatchMode=no
+            -o NumberOfPasswordPrompts=1
+            -o ConnectTimeout=30
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=4
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+          )
+
+          cat > "$RUNNER_TEMP/aitm-recovery.ps1" <<PWSH
+          \$ErrorActionPreference = 'Stop'
+          \$expectedSourceSha = '$EXPECTED_SOURCE_SHA'
+          \$expectedServerSha = '$EXPECTED_SERVER_SHA'
+          \$serverPath = 'C:\\home\\server\\app'
+          \$sourcePath = 'C:\\home\\server\\source\\aitm'
+
+          New-Item -ItemType Directory -Force -Path (Split-Path \$serverPath -Parent) | Out-Null
+          New-Item -ItemType Directory -Force -Path (Split-Path \$sourcePath -Parent) | Out-Null
+
+          if (-not (Test-Path (Join-Path \$serverPath '.git'))) {
+              if (Test-Path \$serverPath) { Remove-Item -Recurse -Force \$serverPath }
+              git clone 'https://github.com/chl4890620123-collab/Server.git' \$serverPath
+              if (\$LASTEXITCODE -ne 0) { throw 'Server clone failed' }
+          }
+          Set-Location \$serverPath
+          git reset --hard HEAD
+          if (\$LASTEXITCODE -ne 0) { throw 'Server reset failed' }
+          git clean -fd
+          if (\$LASTEXITCODE -ne 0) { throw 'Server clean failed' }
+          git fetch --prune origin main
+          if (\$LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
+          git checkout -B main origin/main
+          if (\$LASTEXITCODE -ne 0) { throw 'Server checkout failed' }
+          git reset --hard \$expectedServerSha
+          if (\$LASTEXITCODE -ne 0) { throw 'Server exact revision checkout failed' }
+          git clean -fd
+          if (\$LASTEXITCODE -ne 0) { throw 'Server final clean failed' }
+          \$actualServerSha = (git rev-parse HEAD | Out-String).Trim()
+          if (\$actualServerSha -ne \$expectedServerSha) { throw "Server SHA mismatch: expected=\$expectedServerSha actual=\$actualServerSha" }
+
+          if (-not (Test-Path (Join-Path \$sourcePath '.git'))) {
+              if (Test-Path \$sourcePath) { Remove-Item -Recurse -Force \$sourcePath }
+              git clone 'https://github.com/chl4890620123-collab/Aitm.git' \$sourcePath
+              if (\$LASTEXITCODE -ne 0) { throw 'Aitm clone failed' }
+          }
+          Set-Location \$sourcePath
+          git reset --hard HEAD
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm reset failed' }
+          git clean -fd
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm clean failed' }
+          git fetch --prune origin main
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm fetch failed' }
+          git checkout -B main origin/main
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm checkout failed' }
+          git reset --hard \$expectedSourceSha
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm exact revision checkout failed' }
+          git clean -fd
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm final clean failed' }
+          \$actualSourceSha = (git rev-parse HEAD | Out-String).Trim()
+          if (\$actualSourceSha -ne \$expectedSourceSha) { throw "Aitm SHA mismatch: expected=\$expectedSourceSha actual=\$actualSourceSha" }
+
+          docker version *> \$null
+          if (\$LASTEXITCODE -ne 0) { throw 'Docker Engine is not available' }
+          docker compose version *> \$null
+          if (\$LASTEXITCODE -ne 0) { throw 'Docker Compose is not available' }
+
+          Write-Host '[aitm-recovery] building AI image on mini PC'
+          docker build --pull -t aitm-production-ai:latest (Join-Path \$sourcePath 'demo\\ai')
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm AI image build failed' }
+
+          Write-Host '[aitm-recovery] building backend image on mini PC'
+          docker build --pull -t aitm-production-backend:latest (Join-Path \$sourcePath 'demo')
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm backend image build failed' }
+
+          Write-Host '[aitm-recovery] building frontend image on mini PC'
+          docker build --pull -t aitm-production-frontend:latest (Join-Path \$sourcePath 'front')
+          if (\$LASTEXITCODE -ne 0) { throw 'Aitm frontend image build failed' }
+
+          docker pull mariadb:10.11
+          if (\$LASTEXITCODE -ne 0) { throw 'MariaDB runtime image pull failed' }
+          docker pull caddy:2.10-alpine
+          if (\$LASTEXITCODE -ne 0) { throw 'Caddy runtime image pull failed' }
+
+          Set-Location \$serverPath
+          & '.\\deploy\\scripts\\deploy-aitm.ps1' -ExpectedSha \$expectedSourceSha -Force
+          if (-not \$?) { throw 'Aitm deploy script failed' }
+          PWSH
+
+          encoded="$(iconv -f UTF-8 -t UTF-16LE "$RUNNER_TEMP/aitm-recovery.ps1" | base64 -w0)"
+          remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+          output_file="$RUNNER_TEMP/aitm-recovery-output.txt"
+
+          set +e
+          "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" 2>&1 | tee "$output_file"
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+
+          public_url="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$output_file" | tail -n 1 || true)"
+          deployed_sha="$(grep -Eo '\[aitm\] source SHA: [0-9a-f]{40}' "$output_file" | tail -n 1 | awk '{print $4}' || true)"
+          if [ -z "$public_url" ]; then
+            echo 'Aitm deploy completed without a public URL.' >&2
+            exit 1
+          fi
+          if [ "$deployed_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+            echo "Aitm deployed SHA mismatch: expected=$EXPECTED_SOURCE_SHA actual=${deployed_sha:-missing}" >&2
+            exit 1
+          fi
+          echo "public_url=$public_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify public Aitm functionality
+        shell: bash
+        env:
+          PUBLIC_URL: ${{ steps.remote.outputs.public_url }}
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 5 --retry-delay 3 --connect-timeout 10 --max-time 30 "$PUBLIC_URL/api/standards" >/dev/null
+          curl -fsS --retry 5 --retry-delay 3 --connect-timeout 10 --max-time 30 "$PUBLIC_URL/" >/dev/null
+          echo "Aitm public functionality verified: $PUBLIC_URL"
+
+      - name: Record Aitm recovery deployment status
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.revisions.outputs.source_sha }}
+          SERVER_SHA: ${{ steps.revisions.outputs.server_sha }}
+          PUBLIC_URL: ${{ steps.remote.outputs.public_url }}
+          CANCELLED_RUN: ${{ needs.cancel-stuck-run.outputs.cancelled_run }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/status.txt" <<EOF
+          source_sha=$SOURCE_SHA
+          server_sha=$SERVER_SHA
+          public_url=$PUBLIC_URL
+          public_health=$PUBLIC_URL/api/standards
+          local_url=http://127.0.0.1:9060
+          EOF
+          cat > "$tmpdir/transport.txt" <<EOF
+          run_id=${{ github.run_id }}
+          run_attempt=${{ github.run_attempt }}
+          event=recovery
+          service=aitm
+          source_sha=$SOURCE_SHA
+          server_sha=$SERVER_SHA
+          cancelled_stuck_run=$CANCELLED_RUN
+          image_bundle=false
+          ssh_connection=success
+          remote_exit_code=0
+          deployment=success
+          EOF
+
+          published=false
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            mkdir -p .ops-status
+            cp "$tmpdir/status.txt" .ops-status/aitm.txt
+            cp "$tmpdir/transport.txt" .ops-status/aitm-transport.txt
+            git add .ops-status/aitm.txt .ops-status/aitm-transport.txt
+            if git diff --cached --quiet; then
+              published=true
+              break
+            fi
+            git commit -m 'chore: record aitm recovery deployment'
+            if git push origin HEAD:main; then
+              published=true
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+          rm -rf "$tmpdir"
+          if [ "$published" != 'true' ]; then
+            echo 'Failed to publish Aitm recovery status.' >&2
+            exit 1
+          fi

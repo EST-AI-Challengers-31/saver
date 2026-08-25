@@ -1,4 +1,4 @@
-run_id=32899871108
+run_id=32902988431
 run_attempt=1
 event=schedule
 service=restok
@@ -10,6 +10,6 @@ image_bundle=false
 image_registry=false
 ssh_available=true
 build=skipped
-ssh_connection=attempted
-remote_exit_code=0
-deployment=success
+ssh_connection=not_attempted
+remote_exit_code=999
+deployment=failure

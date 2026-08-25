@@ -24,8 +24,6 @@ on:
 permissions:
   contents: write
 
-# The existing Dahum deployment uses the same group. This serializes every
-# SSH mutation of the Windows mini PC inside the saver repository.
 concurrency:
   group: dahum-production
   cancel-in-progress: false
@@ -414,12 +412,12 @@ jobs:
               if [ -n "$public_url" ] && [ "$deployed_source_sha" = '${{ steps.plan.outputs.source_sha }}' ]; then
                 final=success
                 cat > ".ops-status/${SERVICE}.txt" <<EOF
-source_sha=${{ steps.plan.outputs.source_sha }}
-server_sha=${{ steps.plan.outputs.server_sha }}
-public_url=$public_url
-public_health=$public_url${{ steps.target.outputs.health_path }}
-local_url=${{ steps.target.outputs.local_url }}
-EOF
+          source_sha=${{ steps.plan.outputs.source_sha }}
+          server_sha=${{ steps.plan.outputs.server_sha }}
+          public_url=$public_url
+          public_health=$public_url${{ steps.target.outputs.health_path }}
+          local_url=${{ steps.target.outputs.local_url }}
+          EOF
               fi
             fi
           elif [ "$remote_outcome" = 'failure' ]; then
@@ -427,21 +425,21 @@ EOF
           fi
 
           cat > ".ops-status/${SERVICE}-transport.txt" <<EOF
-run_id=${{ github.run_id }}
-run_attempt=${{ github.run_attempt }}
-event=${{ github.event_name }}
-service=$SERVICE
-source_sha=${{ steps.plan.outputs.source_sha }}
-server_sha=${{ steps.plan.outputs.server_sha }}
-source_changed=${{ steps.plan.outputs.source_changed }}
-server_changed=${{ steps.plan.outputs.server_changed }}
-image_bundle=${{ steps.plan.outputs.bundle }}
-ssh_available=$available
-build=$build_outcome
-ssh_connection=$connection
-remote_exit_code=$exit_code
-deployment=$final
-EOF
+          run_id=${{ github.run_id }}
+          run_attempt=${{ github.run_attempt }}
+          event=${{ github.event_name }}
+          service=$SERVICE
+          source_sha=${{ steps.plan.outputs.source_sha }}
+          server_sha=${{ steps.plan.outputs.server_sha }}
+          source_changed=${{ steps.plan.outputs.source_changed }}
+          server_changed=${{ steps.plan.outputs.server_changed }}
+          image_bundle=${{ steps.plan.outputs.bundle }}
+          ssh_available=$available
+          build=$build_outcome
+          ssh_connection=$connection
+          remote_exit_code=$exit_code
+          deployment=$final
+          EOF
           echo "final=$final" >> "$GITHUB_OUTPUT"
 
           tmpdir="$(mktemp -d)"

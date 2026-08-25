@@ -1,0 +1,14 @@
+run_id=32815020599
+run_attempt=1
+event=schedule
+service=maple
+source_sha=e5abb57b69911360b5d9158b6b7752179ebecaba
+server_sha=9e9374354820eed5da4a02ca29d97f00f9d1110b
+source_changed=true
+server_changed=true
+image_bundle=true
+ssh_available=true
+build=success
+ssh_connection=attempted
+remote_exit_code=1
+deployment=failure

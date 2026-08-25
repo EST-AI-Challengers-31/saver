@@ -1,6 +1,10 @@
 name: Deploy production services through saver SSH gateway
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-services.yml"
   workflow_dispatch:
     inputs:
       service:
@@ -29,7 +33,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-workflow:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate gateway boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'group: dahum-production' .github/workflows/deploy-services.yml
+          grep -q 'repository: chl4890620123-collab/Server' .github/workflows/deploy-services.yml
+          grep -q 'SERVER_SSH_KEY' .github/workflows/deploy-services.yml
+          grep -q 'deploy-aitm.ps1' .github/workflows/deploy-services.yml
+          grep -q 'deploy-restok.ps1' .github/workflows/deploy-services.yml
+          grep -q 'run-maple-deploy.ps1' .github/workflows/deploy-services.yml
+
   deploy:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 

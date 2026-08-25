@@ -1,5 +1,0 @@
-source_sha=e5abb57b69911360b5d9158b6b7752179ebecaba
-server_sha=80cc4d58e14bf42eb2462730a13d41f8d6ff3ef1
-public_url=https://publisher-transcript-recall-violations.trycloudflare.com
-public_health=https://publisher-transcript-recall-violations.trycloudflare.com/api/meister/meta
-local_url=http://127.0.0.1:9040

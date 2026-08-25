@@ -1,0 +1,158 @@
+name: Deploy Aitm through GHCR
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".ops-trigger/aitm-ghcr.txt"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: dahum-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout saver gateway
+        uses: actions/checkout@v5
+
+      - name: Checkout Aitm source
+        uses: actions/checkout@v5
+        with:
+          repository: chl4890620123-collab/Aitm
+          ref: main
+          path: aitm-source
+
+      - name: Checkout Server operations
+        uses: actions/checkout@v5
+        with:
+          repository: chl4890620123-collab/Server
+          ref: main
+          path: server-source
+
+      - name: Resolve exact revisions and image names
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git -C aitm-source rev-parse HEAD)"
+          server_sha="$(git -C server-source rev-parse HEAD)"
+          registry="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/saver"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "server_sha=$server_sha" >> "$GITHUB_OUTPUT"
+          echo "ai_image=$registry/aitm-ai:$source_sha" >> "$GITHUB_OUTPUT"
+          echo "backend_image=$registry/aitm-backend:$source_sha" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=$registry/aitm-frontend:$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Aitm images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull -t "${{ steps.plan.outputs.ai_image }}" aitm-source/demo/ai
+          docker push "${{ steps.plan.outputs.ai_image }}"
+          docker build --pull -t "${{ steps.plan.outputs.backend_image }}" aitm-source/demo
+          docker push "${{ steps.plan.outputs.backend_image }}"
+          docker build --pull -t "${{ steps.plan.outputs.frontend_image }}" aitm-source/front
+          docker push "${{ steps.plan.outputs.frontend_image }}"
+
+      - name: Detect SSH configuration
+        id: ssh
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          available=false
+          if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_USER" ] && { [ -n "$SERVER_SSH_KEY" ] || [ -n "$SERVER_PASSWORD" ]; }; then
+            available=true
+          fi
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+          [ "$available" = true ]
+
+      - name: Pull images and deploy Aitm on mini PC
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          port="${SERVER_PORT:-22}"
+          key_args=()
+          if [ -n "$SERVER_SSH_KEY" ]; then
+            printf '%s\n' "$SERVER_SSH_KEY" > "$HOME/.ssh/aitm_ghcr_key"
+            chmod 600 "$HOME/.ssh/aitm_ghcr_key"
+            key_args=(-i "$HOME/.ssh/aitm_ghcr_key")
+          fi
+          if [ -n "$SERVER_PASSWORD" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+            export SSHPASS="$SERVER_PASSWORD"
+            auth=(sshpass -e ssh "${key_args[@]}")
+          else
+            auth=(ssh "${key_args[@]}")
+          fi
+          ssh_options=(-o BatchMode=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+
+          printf '%s' "$GHCR_TOKEN" | "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+          cat > "$RUNNER_TEMP/aitm-ghcr-remote.ps1" <<'PWSH'
+          $ErrorActionPreference = 'Stop'
+          $serverPath = 'C:\home\server\app'
+          New-Item -ItemType Directory -Force -Path (Split-Path $serverPath -Parent) | Out-Null
+          if (-not (Test-Path (Join-Path $serverPath '.git'))) {
+              if (Test-Path $serverPath) { Remove-Item -Recurse -Force $serverPath }
+              git clone 'https://github.com/chl4890620123-collab/Server.git' $serverPath
+              if ($LASTEXITCODE -ne 0) { throw 'Server clone failed' }
+          }
+          Set-Location $serverPath
+          git fetch --prune origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
+          git checkout -B main origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Server checkout failed' }
+          git reset --hard '${{ steps.plan.outputs.server_sha }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Server revision checkout failed' }
+
+          $images = @(
+              @('${{ steps.plan.outputs.ai_image }}', 'aitm-production-ai:latest'),
+              @('${{ steps.plan.outputs.backend_image }}', 'aitm-production-backend:latest'),
+              @('${{ steps.plan.outputs.frontend_image }}', 'aitm-production-frontend:latest')
+          )
+          foreach ($pair in $images) {
+              docker pull $pair[0]
+              if ($LASTEXITCODE -ne 0) { throw "GHCR pull failed: $($pair[0])" }
+              docker tag $pair[0] $pair[1]
+              if ($LASTEXITCODE -ne 0) { throw "Docker tag failed: $($pair[1])" }
+          }
+          docker logout ghcr.io | Out-Null
+
+          & '.\deploy\scripts\deploy-aitm.ps1' -ExpectedSha '${{ steps.plan.outputs.source_sha }}' -Force
+          if (-not $?) { throw 'Aitm deployment failed' }
+          PWSH
+
+          "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" \
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -" \
+            < "$RUNNER_TEMP/aitm-ghcr-remote.ps1"

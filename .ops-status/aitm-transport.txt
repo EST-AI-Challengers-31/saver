@@ -1,4 +1,4 @@
-run_id=32836337238
+run_id=32851292791
 run_attempt=1
 event=schedule
 service=aitm
@@ -10,5 +10,5 @@ image_bundle=true
 ssh_available=true
 build=success
 ssh_connection=attempted
-remote_exit_code=999
+remote_exit_code=1
 deployment=failure

@@ -1,5 +1,0 @@
-source_sha=57d0d4ba33d83378135fe06341c950b7acacce4b
-server_sha=03dc82945ac015633b695cdc27c889982c04f9f4
-public_url=https://efforts-fisher-counted-builds.trycloudflare.com
-public_health=https://efforts-fisher-counted-builds.trycloudflare.com/api/auth/health
-local_url=http://127.0.0.1:9050

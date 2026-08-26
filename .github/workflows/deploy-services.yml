@@ -1,4 +1,4 @@
-name: Deploy Maple and Restok through saver SSH gateway
+name: Trigger Server production deployment through saver SSH gateway
 
 on:
   push:
@@ -8,69 +8,26 @@ on:
       - ".ops-trigger/service.txt"
   workflow_dispatch:
     inputs:
-      service:
-        description: Service to deploy
-        required: true
-        type: choice
-        options: [restok, maple]
       force:
-        description: Force redeploy
+        description: Force full prioritized redeploy
         required: false
-        default: false
+        default: true
         type: boolean
-  schedule:
-    - cron: "2,17,32,47 * * * *"
-    - cron: "12,27,42,57 * * * *"
 
 permissions:
-  contents: write
+  contents: read
 
-# One physical Docker host is shared by every production service, including Aitm GHCR deployment.
+# saver owns SSH transport only. Server owns deployment order, Docker and verification.
 concurrency:
-  group: dahum-production-server
+  group: server-production-gateway
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  forward-to-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
-      - name: Checkout saver gateway
-        uses: actions/checkout@v5
-
-      - name: Resolve deployment target
-        id: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            case "${{ github.event.schedule }}" in
-              "2,17,32,47 * * * *") service=maple ;;
-              "12,27,42,57 * * * *") service=restok ;;
-              *) echo "Unknown deployment schedule" >&2; exit 1 ;;
-            esac
-            force=false
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            service="${{ inputs.service }}"
-            force="${{ inputs.force }}"
-          else
-            test -f .ops-trigger/service.txt || { echo "Push deployment trigger file is missing." >&2; exit 1; }
-            service="$(tr -d '[:space:]' < .ops-trigger/service.txt)"
-            force=true
-          fi
-
-          case "$service" in
-            maple) local_url="http://127.0.0.1:9040" ;;
-            restok) local_url="http://127.0.0.1:9050" ;;
-            *) echo "Unsupported shared-gateway service: $service" >&2; exit 1 ;;
-          esac
-
-          echo "service=$service" >> "$GITHUB_OUTPUT"
-          echo "force=$force" >> "$GITHUB_OUTPUT"
-          echo "local_url=$local_url" >> "$GITHUB_OUTPUT"
-
-      - name: Detect saver SSH configuration
-        id: ssh
+      - name: Validate saver SSH configuration
         shell: bash
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -79,17 +36,15 @@ jobs:
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
           set -euo pipefail
-          available=false
-          if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_USER" ] && { [ -n "$SERVER_SSH_KEY" ] || [ -n "$SERVER_PASSWORD" ]; }; then available=true; fi
-          echo "available=$available" >> "$GITHUB_OUTPUT"
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || { [ -z "$SERVER_SSH_KEY" ] && [ -z "$SERVER_PASSWORD" ]; }; then
+            echo 'Existing saver SSH configuration is incomplete.' >&2
+            exit 1
+          fi
 
-      - name: Deploy through Server entrypoint
-        id: remote
-        if: steps.ssh.outputs.available == 'true'
+      - name: Forward one production request to Server
         shell: bash
         env:
-          SERVICE: ${{ steps.target.outputs.service }}
-          FORCE: ${{ steps.target.outputs.force }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'true' }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
@@ -97,23 +52,27 @@ jobs:
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
           port="${SERVER_PORT:-22}"
           key_args=()
           if [ -n "$SERVER_SSH_KEY" ]; then
-            printf '%s\n' "$SERVER_SSH_KEY" > "$HOME/.ssh/saver_deploy_key"; chmod 600 "$HOME/.ssh/saver_deploy_key"
-            key_args=(-i "$HOME/.ssh/saver_deploy_key")
+            printf '%s\n' "$SERVER_SSH_KEY" > "$HOME/.ssh/saver_gateway_key"
+            chmod 600 "$HOME/.ssh/saver_gateway_key"
+            key_args=(-i "$HOME/.ssh/saver_gateway_key")
           fi
           if [ -n "$SERVER_PASSWORD" ]; then
-            sudo apt-get update -qq; sudo apt-get install -y -qq sshpass; export SSHPASS="$SERVER_PASSWORD"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+            export SSHPASS="$SERVER_PASSWORD"
             auth=(sshpass -e ssh "${key_args[@]}")
           else
             auth=(ssh "${key_args[@]}")
           fi
           ssh_options=(-o BatchMode=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-          if [ "$FORCE" = true ]; then force_arg=' -Force'; else force_arg=''; fi
 
-          remote_script="$RUNNER_TEMP/deploy-service.ps1"
+          if [ "$FORCE" = true ]; then force_arg=' -Force'; else force_arg=''; fi
+          remote_script="$RUNNER_TEMP/server-production.ps1"
           cat > "$remote_script" <<PWSH
           \$ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
@@ -132,98 +91,27 @@ jobs:
           git -C \$serverPath reset --hard origin/main
           git -C \$serverPath clean -fd
           Set-Location \$serverPath
-          & '.\deploy\scripts\deploy-service.ps1' -Service '$SERVICE'$force_arg
-          if (-not \$?) { throw '$SERVICE deployment failed' }
+          & '.\deploy\scripts\deploy-production.ps1'$force_arg
+          if (-not \$?) { throw 'Server production deployment failed' }
           PWSH
+
           wrapper='$script = [Console]::In.ReadToEnd(); Invoke-Expression $script'
           encoded_wrapper="$(printf '%s' "$wrapper" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
           remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_wrapper"
-          set +e
-          output="$(timeout 35m "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" < "$remote_script" 2>&1)"
-          code=$?
-          set -e
-          printf '%s\n' "$output" | tee "$RUNNER_TEMP/${SERVICE}-ssh-output.txt"
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
 
-      - name: Verify deployment result
-        id: verify
-        if: always()
-        shell: bash
-        env:
-          SERVICE: ${{ steps.target.outputs.service }}
-        run: |
-          set -euo pipefail
-          output_file="$RUNNER_TEMP/${SERVICE}-ssh-output.txt"
-          exit_code='${{ steps.remote.outputs.exit_code }}'; [ -n "$exit_code" ] || exit_code=999
-          final=failure; public_url=''; source_sha=''
-          if [ '${{ steps.ssh.outputs.available }}' != true ]; then
-            final=skipped
-          elif [ "$exit_code" = 0 ] && [ -f "$output_file" ]; then
-            public_url="$(grep -Eo "\[$SERVICE\] forwarded URL: https?://[^[:space:]<]+" "$output_file" | tail -n1 | sed -E 's/^\[[^]]+\] forwarded URL: //' || true)"
-            source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n1 | awk '{print $4}' || true)"
-            if [ -n "$public_url" ] && [ -n "$source_sha" ]; then
-              for attempt in 1 2 3 4 5 6; do
-                if curl --fail --silent --show-error --max-time 15 "$public_url/" >/dev/null; then
-                  final=success
-                  break
-                fi
-                sleep 5
-              done
+          code=255
+          for attempt in 1 2 3 4; do
+            set +e
+            output="$(timeout 80m "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" < "$remote_script" 2>&1)"
+            code=$?
+            set -e
+            printf '%s\n' "$output"
+            if [ "$code" = 0 ]; then exit 0; fi
+            if printf '%s' "$output" | grep -Eq 'Connection reset by peer|kex_exchange_identification|Connection timed out|Connection refused'; then
+              echo "SSH transport retry $attempt/4" >&2
+              sleep $((attempt * 8))
+              continue
             fi
-          fi
-          echo "final=$final" >> "$GITHUB_OUTPUT"
-          echo "public_url=$public_url" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-
-      - name: Record centralized deployment status
-        if: always()
-        shell: bash
-        env:
-          SERVICE: ${{ steps.target.outputs.service }}
-          FINAL: ${{ steps.verify.outputs.final }}
-          PUBLIC_URL: ${{ steps.verify.outputs.public_url }}
-          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
-          EXIT_CODE: ${{ steps.verify.outputs.exit_code }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p .ops-status
-            if [ "$FINAL" = success ]; then
-              cat > ".ops-status/${SERVICE}.txt" <<EOF
-          source_sha=$SOURCE_SHA
-          public_url=$PUBLIC_URL
-          local_url=${{ steps.target.outputs.local_url }}
-          EOF
-            else
-              rm -f ".ops-status/${SERVICE}.txt"
-            fi
-            cat > ".ops-status/${SERVICE}-transport.txt" <<EOF
-          run_id=${{ github.run_id }}
-          service=$SERVICE
-          ssh_available=${{ steps.ssh.outputs.available }}
-          remote_exit_code=$EXIT_CODE
-          deployment=$FINAL
-          EOF
-            git add -A .ops-status
-            if git diff --cached --quiet; then break; fi
-            git commit -m "chore: record ${SERVICE} deployment result"
-            if git push origin HEAD:main; then break; fi
-            if [ "$attempt" = 5 ]; then echo 'Failed to record deployment status after retries.' >&2; exit 1; fi
-            sleep $((attempt * 2))
+            exit "$code"
           done
-
-      - name: Enforce deployment result
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ '${{ steps.verify.outputs.final }}' != success ]; then
-            echo '${{ steps.target.outputs.service }} deployment or verification failed.' >&2
-            exit 1
-          fi
+          exit "$code"

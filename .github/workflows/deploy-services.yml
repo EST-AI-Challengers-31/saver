@@ -14,7 +14,7 @@ on:
         type: choice
         options: [aitm, restok, maple]
       force:
-        description: Force redeploy even when source and operations revisions are unchanged
+        description: Force redeploy
         required: false
         default: false
         type: boolean
@@ -25,37 +25,13 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
-  group: dahum-production-${{ inputs.service || (github.event.schedule == '2,17,32,47 * * * *' && 'maple') || (github.event.schedule == '7,22,37,52 * * * *' && 'aitm') || (github.event.schedule == '12,27,42,57 * * * *' && 'restok') || (contains(github.event.head_commit.message, 'aitm') && 'aitm') || (contains(github.event.head_commit.message, 'restok') && 'restok') || 'maple' }}
+  group: dahum-production-${{ inputs.service || (github.event.schedule == '2,17,32,47 * * * *' && 'maple') || (github.event.schedule == '7,22,37,52 * * * *' && 'aitm') || (github.event.schedule == '12,27,42,57 * * * *' && 'restok') || 'maple' }}
   cancel-in-progress: true
 
 jobs:
-  validate-workflow:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Validate gateway boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q 'group: dahum-production-' .github/workflows/deploy-services.yml
-          grep -q "github.event.schedule == '2,17,32,47 \* \* \* \*'" .github/workflows/deploy-services.yml
-          grep -q "github.event.schedule == '7,22,37,52 \* \* \* \*'" .github/workflows/deploy-services.yml
-          grep -q "github.event.schedule == '12,27,42,57 \* \* \* \*'" .github/workflows/deploy-services.yml
-          grep -q 'cancel-in-progress: true' .github/workflows/deploy-services.yml
-          grep -q 'packages: write' .github/workflows/deploy-services.yml
-          grep -q '.ops-trigger/service.txt' .github/workflows/deploy-services.yml
-          grep -q 'repository: chl4890620123-collab/Server' .github/workflows/deploy-services.yml
-          grep -q 'SERVER_SSH_KEY' .github/workflows/deploy-services.yml
-          grep -q 'saver-maple' .github/workflows/deploy-services.yml
-          grep -q 'org.opencontainers.image.revision' .github/workflows/deploy-services.yml
-          grep -q 'run-maple-deploy.ps1' .github/workflows/deploy-services.yml
-
   deploy:
-    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[deploy-service]') || contains(github.event.head_commit.message, 'fix(deploy)')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -75,149 +51,35 @@ jobs:
               *) echo "Unknown deployment schedule" >&2; exit 1 ;;
             esac
             force=false
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            if [[ "${{ github.event.head_commit.message }}" == fix\(deploy\)* ]]; then
-              service=maple
-            else
-              test -f .ops-trigger/service.txt || { echo "Push deployment trigger file is missing." >&2; exit 1; }
-              service="$(tr -d '[:space:]' < .ops-trigger/service.txt)"
-            fi
-            force=true
-          else
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             service="${{ inputs.service }}"
             force="${{ inputs.force }}"
+          else
+            test -f .ops-trigger/service.txt || { echo "Push deployment trigger file is missing." >&2; exit 1; }
+            service="$(tr -d '[:space:]' < .ops-trigger/service.txt)"
+            force=true
           fi
 
           case "$service" in
+            maple)
+              local_url="http://127.0.0.1:9040"
+              functional_path="/api/meister/meta"
+              ;;
             aitm)
-              repository="chl4890620123-collab/Aitm"
               local_url="http://127.0.0.1:9060"
               functional_path="/api/standards"
               ;;
             restok)
-              repository="chl4890620123-collab/Restok-Rangchain"
               local_url="http://127.0.0.1:9050"
               functional_path="/api/auth/health"
-              ;;
-            maple)
-              repository="chl4890620123-collab/maple"
-              local_url="http://127.0.0.1:9040"
-              functional_path="/api/meister/meta"
               ;;
             *) echo "Unsupported service: $service" >&2; exit 1 ;;
           esac
 
           echo "service=$service" >> "$GITHUB_OUTPUT"
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "force=$force" >> "$GITHUB_OUTPUT"
           echo "local_url=$local_url" >> "$GITHUB_OUTPUT"
           echo "functional_path=$functional_path" >> "$GITHUB_OUTPUT"
-          echo "force=$force" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout Server operations repository
-        uses: actions/checkout@v5
-        with:
-          repository: chl4890620123-collab/Server
-          ref: main
-          path: server-source
-
-      - name: Checkout service source
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ steps.target.outputs.repository }}
-          ref: main
-          path: service-source
-
-      - name: Plan exact deployment
-        id: plan
-        shell: bash
-        env:
-          SERVICE: ${{ steps.target.outputs.service }}
-          FORCE_REQUESTED: ${{ steps.target.outputs.force }}
-        run: |
-          set -euo pipefail
-          source_sha="$(git -C service-source rev-parse HEAD)"
-          server_sha="$(git -C server-source rev-parse HEAD)"
-          status_file=".ops-status/${SERVICE}.txt"
-          deployed_source_sha="$(sed -n 's/^source_sha=//p' "$status_file" 2>/dev/null | head -n1 || true)"
-          deployed_server_sha="$(sed -n 's/^server_sha=//p' "$status_file" 2>/dev/null | head -n1 || true)"
-          source_changed=false
-          server_changed=false
-          [ "$deployed_source_sha" = "$source_sha" ] || source_changed=true
-          [ "$deployed_server_sha" = "$server_sha" ] || server_changed=true
-          bundle=false
-          registry=false
-          case "$SERVICE" in
-            aitm|maple)
-              if [ "$FORCE_REQUESTED" = true ] || [ "$source_changed" = true ]; then registry=true; fi
-              ;;
-            restok)
-              if [ "$FORCE_REQUESTED" = true ] || [ "$source_changed" = true ] || [ "$server_changed" = true ]; then bundle=true; fi
-              ;;
-          esac
-          image_required=false
-          if [ "$bundle" = true ] || [ "$registry" = true ]; then image_required=true; fi
-          force_deploy=false
-          if [ "$FORCE_REQUESTED" = true ] || [ "$server_changed" = true ]; then force_deploy=true; fi
-          for pair in \
-            "source_sha=$source_sha" "server_sha=$server_sha" \
-            "source_changed=$source_changed" "server_changed=$server_changed" \
-            "bundle=$bundle" "registry=$registry" "image_required=$image_required" "force_deploy=$force_deploy"; do
-            echo "$pair" >> "$GITHUB_OUTPUT"
-          done
-          echo "Service: $SERVICE"
-          echo "Source SHA: $source_sha"
-          echo "Server ops SHA: $server_sha"
-          echo "Build SCP image bundle: $bundle"
-          echo "Publish GHCR image: $registry"
-
-      - name: Prepare exact deployment images
-        id: build
-        if: steps.plan.outputs.image_required == 'true'
-        shell: bash
-        env:
-          SERVICE: ${{ steps.target.outputs.service }}
-          SOURCE_SHA: ${{ steps.plan.outputs.source_sha }}
-          GHCR_TOKEN: ${{ github.token }}
-          GHCR_USER: ${{ github.actor }}
-          RESTOK_GOOGLE_OAUTH_ENABLED: ${{ vars.RESTOK_GOOGLE_OAUTH_ENABLED || 'false' }}
-        run: |
-          set -euo pipefail
-          registry_owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
-          case "$SERVICE" in
-            aitm)
-              registry_base="ghcr.io/${registry_owner}/saver-aitm"
-              printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
-              trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-              for spec in "ai:service-source/demo/ai" "backend:service-source/demo" "frontend:service-source/front"; do
-                name="${spec%%:*}"
-                path="${spec#*:}"
-                ref="${registry_base}-${name}:${SOURCE_SHA}"
-                docker build --pull --label "org.opencontainers.image.revision=${SOURCE_SHA}" -t "$ref" "$path"
-                docker push "$ref"
-              done
-              ;;
-            maple)
-              image_ref="ghcr.io/${registry_owner}/saver-maple:${SOURCE_SHA}"
-              printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
-              trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-              docker build --pull --label "org.opencontainers.image.revision=${SOURCE_SHA}" -t "$image_ref" service-source
-              docker push "$image_ref"
-              echo "Published Maple image: $image_ref"
-              ;;
-            restok)
-              docker build --pull -t restok-production-ai:latest service-source/ai_server
-              docker build --pull -t restok-production-backend:latest service-source/backend
-              docker build --pull \
-                --build-arg REACT_APP_API_URL= \
-                --build-arg REACT_APP_GOOGLE_OAUTH_ENABLED="$RESTOK_GOOGLE_OAUTH_ENABLED" \
-                -t restok-production-frontend:latest service-source/frontend
-              docker pull mariadb:11.4
-              docker pull caddy:2.10-alpine
-              docker save restok-production-ai:latest restok-production-backend:latest restok-production-frontend:latest mariadb:11.4 caddy:2.10-alpine \
-                | gzip -1 > "$RUNNER_TEMP/restok-images.tar.gz"
-              test -s "$RUNNER_TEMP/restok-images.tar.gz"
-              ;;
-          esac
 
       - name: Detect saver SSH configuration
         id: ssh
@@ -230,15 +92,18 @@ jobs:
         run: |
           set -euo pipefail
           available=false
-          if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_USER" ] && { [ -n "$SERVER_SSH_KEY" ] || [ -n "$SERVER_PASSWORD" ]; }; then available=true; fi
+          if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_USER" ] && { [ -n "$SERVER_SSH_KEY" ] || [ -n "$SERVER_PASSWORD" ]; }; then
+            available=true
+          fi
           echo "available=$available" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy through saver SSH gateway
+      - name: Deploy through Server entrypoint
         id: remote
-        if: steps.ssh.outputs.available == 'true' && (steps.build.outcome == 'success' || steps.build.outcome == 'skipped')
+        if: steps.ssh.outputs.available == 'true'
         shell: bash
         env:
           SERVICE: ${{ steps.target.outputs.service }}
+          FORCE: ${{ steps.target.outputs.force }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
@@ -246,8 +111,8 @@ jobs:
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-          output_file="$RUNNER_TEMP/${SERVICE}-ssh-output.txt"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
           port="${SERVER_PORT:-22}"
           key_args=()
           if [ -n "$SERVER_SSH_KEY" ]; then
@@ -256,151 +121,55 @@ jobs:
             key_args=(-i "$HOME/.ssh/saver_deploy_key")
           fi
           if [ -n "$SERVER_PASSWORD" ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
             export SSHPASS="$SERVER_PASSWORD"
             auth=(sshpass -e ssh "${key_args[@]}")
-            transfer=(sshpass -e scp "${key_args[@]}")
           else
             auth=(ssh "${key_args[@]}")
-            transfer=(scp "${key_args[@]}")
           fi
           ssh_options=(-o BatchMode=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-          "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" \
-            "powershell.exe -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory -Force -Path 'C:\\home\\server' | Out-Null\""
-          if [ "${{ steps.plan.outputs.bundle }}" = true ]; then
-            timeout 15m "${transfer[@]}" -P "$port" \
-              -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              "$RUNNER_TEMP/${SERVICE}-images.tar.gz" "$SERVER_USER@$SERVER_HOST:C:/home/server/${SERVICE}-images.tar.gz"
+
+          if [ "$FORCE" = true ]; then
+            force_arg=' -Force'
+          else
+            force_arg=''
           fi
 
-          cat > "$RUNNER_TEMP/service-remote.ps1" <<'PWSH'
-          $ErrorActionPreference = 'Stop'
+          remote_script="$RUNNER_TEMP/deploy-service.ps1"
+          cat > "$remote_script" <<PWSH
+          \$ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          $service = '${{ steps.target.outputs.service }}'
-          $expectedSourceSha = '${{ steps.plan.outputs.source_sha }}'
-          $expectedServerSha = '${{ steps.plan.outputs.server_sha }}'
-          $forceDeploy = '${{ steps.plan.outputs.force_deploy }}' -eq 'true'
-          $bundleExpected = '${{ steps.plan.outputs.bundle }}' -eq 'true'
-          $registryExpected = '${{ steps.plan.outputs.registry }}' -eq 'true'
-          $ghcrUser = '${{ github.actor }}'
-          $ghcrToken = '${{ github.token }}'
-          $registryOwner = '${{ github.repository_owner }}'.ToLowerInvariant()
-          $serverPath = 'C:\home\server\app'
-          New-Item -ItemType Directory -Force -Path (Split-Path $serverPath -Parent) | Out-Null
-          if (-not (Test-Path (Join-Path $serverPath '.git'))) {
-              if (Test-Path $serverPath) { Remove-Item -Recurse -Force $serverPath }
-              git clone 'https://github.com/chl4890620123-collab/Server.git' $serverPath
-              if ($LASTEXITCODE -ne 0) { throw 'Server clone failed' }
+          \$serverPath = 'C:\home\server\app'
+          New-Item -ItemType Directory -Force -Path (Split-Path \$serverPath -Parent) | Out-Null
+          if (-not (Test-Path (Join-Path \$serverPath '.git'))) {
+              if (Test-Path \$serverPath) { Remove-Item -Recurse -Force \$serverPath }
+              git clone 'https://github.com/chl4890620123-collab/Server.git' \$serverPath
+              if (\$LASTEXITCODE -ne 0) { throw 'Server clone failed' }
           }
-          Set-Location $serverPath
-          git reset --hard HEAD
-          git clean -fd
-          git fetch --prune origin main
-          if ($LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
-          git checkout -B main origin/main
-          git reset --hard origin/main
-          git clean -fd
-          $actualServerSha = (git rev-parse HEAD | Out-String).Trim()
-          if ($actualServerSha -ne $expectedServerSha) { throw "Server SHA changed: expected=$expectedServerSha actual=$actualServerSha" }
-          switch ($service) {
-              'aitm' { $sourceRepository = 'https://github.com/chl4890620123-collab/Aitm.git' }
-              'restok' { $sourceRepository = 'https://github.com/chl4890620123-collab/Restok-Rangchain.git' }
-              'maple' { $sourceRepository = 'https://github.com/chl4890620123-collab/maple.git' }
-              default { throw "Unsupported service: $service" }
-          }
-          $remoteHeadLine = (git ls-remote $sourceRepository 'refs/heads/main' | Out-String).Trim()
-          if (-not $remoteHeadLine) { throw "Could not resolve $service main SHA" }
-          $remoteHead = ($remoteHeadLine -split '\s+')[0]
-          if ($remoteHead -ne $expectedSourceSha) { throw "$service main changed during deployment" }
-          $bundle = "C:\home\server\$service-images.tar.gz"
-          if ($bundleExpected) {
-              if (-not (Test-Path $bundle)) { throw "$service image bundle was not transferred." }
-              docker load --input $bundle
-              if ($LASTEXITCODE -ne 0) { throw "Failed to load $service image bundle." }
-              Remove-Item -Force $bundle
-          } elseif (Test-Path $bundle) { Remove-Item -Force $bundle }
-
-          if ($registryExpected) {
-              docker version *> $null
-              if ($LASTEXITCODE -ne 0) { throw 'Docker Engine is not available.' }
-              $dockerConfigRoot = Join-Path $env:TEMP ("$service-ghcr-" + [guid]::NewGuid().ToString('N'))
-              $previousDockerConfig = $env:DOCKER_CONFIG
-              try {
-                  New-Item -ItemType Directory -Force -Path $dockerConfigRoot | Out-Null
-                  $authBytes = [Text.Encoding]::ASCII.GetBytes("$ghcrUser`:$ghcrToken")
-                  $authValue = [Convert]::ToBase64String($authBytes)
-                  $dockerConfig = @{ auths = @{ 'ghcr.io' = @{ auth = $authValue } } } | ConvertTo-Json -Depth 4
-                  $dockerConfig | Set-Content -Path (Join-Path $dockerConfigRoot 'config.json') -Encoding ascii
-                  $env:DOCKER_CONFIG = $dockerConfigRoot
-                  if ($service -eq 'aitm') {
-                      $base = "ghcr.io/$registryOwner/saver-aitm"
-                      $imageMap = [ordered]@{
-                          "${base}-ai:${expectedSourceSha}" = 'aitm-production-ai:latest'
-                          "${base}-backend:${expectedSourceSha}" = 'aitm-production-backend:latest'
-                          "${base}-frontend:${expectedSourceSha}" = 'aitm-production-frontend:latest'
-                      }
-                      $runtimeImages = @('mariadb:10.11', 'caddy:2.10-alpine')
-                  } elseif ($service -eq 'maple') {
-                      $imageMap = [ordered]@{
-                          "ghcr.io/$registryOwner/saver-maple:${expectedSourceSha}" = 'maple-production-app:latest'
-                      }
-                      $runtimeImages = @('mariadb:11.4', 'caddy:2.10-alpine')
-                  } else { throw "Registry staging is unsupported for $service" }
-                  foreach ($entry in $imageMap.GetEnumerator()) {
-                      Write-Host "[$service] pulling $($entry.Key)"
-                      docker pull $entry.Key
-                      if ($LASTEXITCODE -ne 0) { throw "GHCR pull failed: $($entry.Key)" }
-                      $inspectJson = docker image inspect $entry.Key | Out-String
-                      if ($LASTEXITCODE -ne 0) { throw "Image inspect failed: $($entry.Key)" }
-                      $inspectData = $inspectJson | ConvertFrom-Json
-                      $revision = [string]$inspectData[0].Config.Labels.'org.opencontainers.image.revision'
-                      if ($revision -ne $expectedSourceSha) { throw "Image revision mismatch: expected=$expectedSourceSha actual=$revision" }
-                      docker tag $entry.Key $entry.Value
-                      if ($LASTEXITCODE -ne 0) { throw "Image tag failed: $($entry.Value)" }
-                  }
-                  foreach ($runtimeImage in $runtimeImages) {
-                      docker image inspect $runtimeImage *> $null
-                      if ($LASTEXITCODE -ne 0) {
-                          docker pull $runtimeImage
-                          if ($LASTEXITCODE -ne 0) { throw "Runtime image pull failed: $runtimeImage" }
-                      }
-                  }
-              } finally {
-                  if ([string]::IsNullOrWhiteSpace($previousDockerConfig)) { Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue }
-                  else { $env:DOCKER_CONFIG = $previousDockerConfig }
-                  Remove-Item -Recurse -Force $dockerConfigRoot -ErrorAction SilentlyContinue
-              }
-          }
-
-          Set-Location $serverPath
-          switch ($service) {
-              'aitm' {
-                  & '.\deploy\scripts\deploy-aitm.ps1' -ExpectedSha $expectedSourceSha -Force:$forceDeploy
-                  if (-not $?) { throw 'Aitm deploy script failed' }
-              }
-              'restok' {
-                  & '.\deploy\scripts\check-restok-legacy-data.ps1'
-                  if (-not $?) { throw 'Restok legacy data preflight failed' }
-                  & '.\deploy\scripts\deploy-restok.ps1' -Force:$forceDeploy -Prebuilt
-                  if (-not $?) { throw 'Restok deploy script failed' }
-              }
-              'maple' {
-                  & '.\deploy\scripts\run-maple-deploy.ps1' -Force:$forceDeploy
-                  if (-not $?) { throw 'Maple deploy script failed' }
-              }
-          }
+          git -C \$serverPath reset --hard HEAD
+          git -C \$serverPath clean -fd
+          git -C \$serverPath fetch --prune origin main
+          if (\$LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
+          git -C \$serverPath checkout -B main origin/main
+          git -C \$serverPath reset --hard origin/main
+          git -C \$serverPath clean -fd
+          Set-Location \$serverPath
+          & '.\deploy\scripts\deploy-service.ps1' -Service '$SERVICE'$force_arg
+          if (-not \$?) { throw '$SERVICE deployment failed' }
           PWSH
 
           wrapper='$script = [Console]::In.ReadToEnd(); Invoke-Expression $script'
           encoded_wrapper="$(printf '%s' "$wrapper" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
           remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_wrapper"
+
           set +e
-          output="$(timeout 25m "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" < "$RUNNER_TEMP/service-remote.ps1" 2>&1)"
+          output="$(timeout 35m "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "$remote_command" < "$remote_script" 2>&1)"
           code=$?
           set -e
-          printf '%s\n' "$output" | tee "$output_file"
+          printf '%s\n' "$output" | tee "$RUNNER_TEMP/${SERVICE}-ssh-output.txt"
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Record centralized deployment status
         id: record
@@ -412,94 +181,59 @@ jobs:
           set -euo pipefail
           mkdir -p .ops-status
           output_file="$RUNNER_TEMP/${SERVICE}-ssh-output.txt"
-          available='${{ steps.ssh.outputs.available }}'
-          build_outcome='${{ steps.build.outcome }}'
-          remote_outcome='${{ steps.remote.outcome }}'
           exit_code='${{ steps.remote.outputs.exit_code }}'
           [ -n "$exit_code" ] || exit_code=999
           final=failure
-          connection=not_attempted
           public_url=''
-          deployed_source_sha=''
-          if [ "$available" != true ]; then
+          source_sha=''
+
+          if [ '${{ steps.ssh.outputs.available }}' != true ]; then
             final=skipped
-          elif [ "$build_outcome" = failure ]; then
-            final=failure
-          elif [ "$remote_outcome" = success ]; then
-            connection=attempted
-            if [ "$exit_code" = 0 ] && [ -f "$output_file" ]; then
-              public_url="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$output_file" | tail -n1 || true)"
-              deployed_source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n1 | awk '{print $4}' || true)"
-              if [ -n "$public_url" ] && [ "$deployed_source_sha" = '${{ steps.plan.outputs.source_sha }}' ]; then
-                root_ok=false
-                api_ok=false
-                for attempt in 1 2 3 4 5 6; do
-                  if curl --fail --silent --show-error --max-time 15 "$public_url/" >/tmp/public-root; then root_ok=true; fi
-                  if curl --fail --silent --show-error --max-time 15 "$public_url${{ steps.target.outputs.functional_path }}" >/tmp/public-api; then api_ok=true; fi
-                  if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then break; fi
-                  sleep 5
-                done
-                if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then
-                  final=success
-                  cat > ".ops-status/${SERVICE}.txt" <<EOF
-          source_sha=${{ steps.plan.outputs.source_sha }}
-          server_sha=${{ steps.plan.outputs.server_sha }}
+          elif [ "$exit_code" = 0 ] && [ -f "$output_file" ]; then
+            public_url="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$output_file" | tail -n1 || true)"
+            source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n1 | awk '{print $4}' || true)"
+            if [ -n "$public_url" ] && [ -n "$source_sha" ]; then
+              root_ok=false
+              api_ok=false
+              for attempt in 1 2 3 4 5 6; do
+                if curl --fail --silent --show-error --max-time 15 "$public_url/" >/dev/null; then root_ok=true; fi
+                if curl --fail --silent --show-error --max-time 15 "$public_url${{ steps.target.outputs.functional_path }}" >/dev/null; then api_ok=true; fi
+                if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then break; fi
+                sleep 5
+              done
+              if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then
+                final=success
+                cat > ".ops-status/${SERVICE}.txt" <<EOF
+          source_sha=$source_sha
           public_url=$public_url
           public_health=$public_url${{ steps.target.outputs.functional_path }}
           local_url=${{ steps.target.outputs.local_url }}
           EOF
-                fi
               fi
             fi
-          elif [ "$remote_outcome" = failure ]; then
-            connection=attempted
           fi
-          if [ "$final" != success ]; then rm -f ".ops-status/${SERVICE}.txt"; fi
+
+          if [ "$final" != success ]; then
+            rm -f ".ops-status/${SERVICE}.txt"
+          fi
+
           cat > ".ops-status/${SERVICE}-transport.txt" <<EOF
           run_id=${{ github.run_id }}
-          run_attempt=${{ github.run_attempt }}
-          event=${{ github.event_name }}
           service=$SERVICE
-          source_sha=${{ steps.plan.outputs.source_sha }}
-          server_sha=${{ steps.plan.outputs.server_sha }}
-          source_changed=${{ steps.plan.outputs.source_changed }}
-          server_changed=${{ steps.plan.outputs.server_changed }}
-          image_bundle=${{ steps.plan.outputs.bundle }}
-          image_registry=${{ steps.plan.outputs.registry }}
-          ssh_available=$available
-          build=$build_outcome
-          ssh_connection=$connection
+          ssh_available=${{ steps.ssh.outputs.available }}
           remote_exit_code=$exit_code
           deployment=$final
           EOF
           echo "final=$final" >> "$GITHUB_OUTPUT"
 
-          tmpdir="$(mktemp -d)"
-          cp ".ops-status/${SERVICE}-transport.txt" "$tmpdir/transport.txt"
-          if [ -f ".ops-status/${SERVICE}.txt" ]; then cp ".ops-status/${SERVICE}.txt" "$tmpdir/status.txt"; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          published=false
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p .ops-status
-            cp "$tmpdir/transport.txt" ".ops-status/${SERVICE}-transport.txt"
-            if [ -f "$tmpdir/status.txt" ]; then cp "$tmpdir/status.txt" ".ops-status/${SERVICE}.txt"
-            else rm -f ".ops-status/${SERVICE}.txt"; fi
-            git add -A -- ".ops-status/${SERVICE}-transport.txt"
-            if [ -f ".ops-status/${SERVICE}.txt" ]; then
-              git add -- ".ops-status/${SERVICE}.txt"
-            else
-              git rm --cached --ignore-unmatch -- ".ops-status/${SERVICE}.txt" >/dev/null 2>&1 || true
-            fi
-            if git diff --cached --quiet; then published=true; break; fi
+          git add -A .ops-status
+          if ! git diff --cached --quiet; then
             git commit -m "chore: record ${SERVICE} deployment result"
-            if git push origin HEAD:main; then published=true; break; fi
-            sleep $((attempt * 2))
-          done
-          rm -rf "$tmpdir"
-          [ "$published" = true ] || { echo "Failed to publish $SERVICE deployment status." >&2; exit 1; }
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
 
       - name: Enforce deployment result
         if: always()

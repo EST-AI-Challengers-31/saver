@@ -164,7 +164,7 @@ jobs:
           if [ '${{ steps.ssh.outputs.available }}' != true ]; then
             final=skipped
           elif [ "$exit_code" = 0 ] && [ -f "$output_file" ]; then
-            public_url="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$output_file" | tail -n1 || true)"
+            public_url="$(grep -Eo "\[$SERVICE\] forwarded URL: https?://[^[:space:]<]+" "$output_file" | tail -n1 | sed -E 's/^\[[^]]+\] forwarded URL: //' || true)"
             source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n1 | awk '{print $4}' || true)"
             if [ -n "$public_url" ] && [ -n "$source_sha" ]; then
               root_ok=false; api_ok=false

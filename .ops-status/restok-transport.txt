@@ -1,5 +1,5 @@
-run_id=32961031274
+run_id=32964508394
 service=restok
 ssh_available=true
-remote_exit_code=0
+remote_exit_code=124
 deployment=failure

@@ -1,4 +1,4 @@
-name: Deploy production services through saver SSH gateway
+name: Deploy Maple and Restok through saver SSH gateway
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
         description: Service to deploy
         required: true
         type: choice
-        options: [aitm, restok, maple]
+        options: [restok, maple]
       force:
         description: Force redeploy
         required: false
@@ -20,13 +20,12 @@ on:
         type: boolean
   schedule:
     - cron: "2,17,32,47 * * * *"
-    - cron: "7,22,37,52 * * * *"
     - cron: "12,27,42,57 * * * *"
 
 permissions:
   contents: write
 
-# One physical Docker host is shared by all services. Never build/deploy two services at once.
+# One physical Docker host is shared by every production service, including Aitm GHCR deployment.
 concurrency:
   group: dahum-production-server
   cancel-in-progress: false
@@ -47,7 +46,6 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ]; then
             case "${{ github.event.schedule }}" in
               "2,17,32,47 * * * *") service=maple ;;
-              "7,22,37,52 * * * *") service=aitm ;;
               "12,27,42,57 * * * *") service=restok ;;
               *) echo "Unknown deployment schedule" >&2; exit 1 ;;
             esac
@@ -62,16 +60,14 @@ jobs:
           fi
 
           case "$service" in
-            maple) local_url="http://127.0.0.1:9040"; functional_path="/api/meister/meta" ;;
-            aitm) local_url="http://127.0.0.1:9060"; functional_path="/api/standards" ;;
-            restok) local_url="http://127.0.0.1:9050"; functional_path="/api/auth/health" ;;
-            *) echo "Unsupported service: $service" >&2; exit 1 ;;
+            maple) local_url="http://127.0.0.1:9040" ;;
+            restok) local_url="http://127.0.0.1:9050" ;;
+            *) echo "Unsupported shared-gateway service: $service" >&2; exit 1 ;;
           esac
 
           echo "service=$service" >> "$GITHUB_OUTPUT"
           echo "force=$force" >> "$GITHUB_OUTPUT"
           echo "local_url=$local_url" >> "$GITHUB_OUTPUT"
-          echo "functional_path=$functional_path" >> "$GITHUB_OUTPUT"
 
       - name: Detect saver SSH configuration
         id: ssh
@@ -167,14 +163,13 @@ jobs:
             public_url="$(grep -Eo "\[$SERVICE\] forwarded URL: https?://[^[:space:]<]+" "$output_file" | tail -n1 | sed -E 's/^\[[^]]+\] forwarded URL: //' || true)"
             source_sha="$(grep -Eo "\[$SERVICE\] source SHA: [0-9a-f]{40}" "$output_file" | tail -n1 | awk '{print $4}' || true)"
             if [ -n "$public_url" ] && [ -n "$source_sha" ]; then
-              root_ok=false; api_ok=false
               for attempt in 1 2 3 4 5 6; do
-                curl --fail --silent --show-error --max-time 15 "$public_url/" >/dev/null && root_ok=true || true
-                curl --fail --silent --show-error --max-time 15 "$public_url${{ steps.target.outputs.functional_path }}" >/dev/null && api_ok=true || true
-                if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then break; fi
+                if curl --fail --silent --show-error --max-time 15 "$public_url/" >/dev/null; then
+                  final=success
+                  break
+                fi
                 sleep 5
               done
-              if [ "$root_ok" = true ] && [ "$api_ok" = true ]; then final=success; fi
             fi
           fi
           echo "final=$final" >> "$GITHUB_OUTPUT"
@@ -203,7 +198,6 @@ jobs:
               cat > ".ops-status/${SERVICE}.txt" <<EOF
           source_sha=$SOURCE_SHA
           public_url=$PUBLIC_URL
-          public_health=$PUBLIC_URL${{ steps.target.outputs.functional_path }}
           local_url=${{ steps.target.outputs.local_url }}
           EOF
             else

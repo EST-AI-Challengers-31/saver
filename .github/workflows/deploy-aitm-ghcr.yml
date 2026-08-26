@@ -11,8 +11,9 @@ permissions:
   contents: read
   packages: write
 
+# All production deployments share one physical Docker host.
 concurrency:
-  group: dahum-production
+  group: dahum-production-server
   cancel-in-progress: false
 
 jobs:
@@ -62,15 +63,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker build --pull -t "${{ steps.plan.outputs.ai_image }}" aitm-source/demo/ai
+          docker build --pull --label "org.opencontainers.image.revision=${{ steps.plan.outputs.source_sha }}" -t "${{ steps.plan.outputs.ai_image }}" aitm-source/demo/ai
           docker push "${{ steps.plan.outputs.ai_image }}"
-          docker build --pull -t "${{ steps.plan.outputs.backend_image }}" aitm-source/demo
+          docker build --pull --label "org.opencontainers.image.revision=${{ steps.plan.outputs.source_sha }}" -t "${{ steps.plan.outputs.backend_image }}" aitm-source/demo
           docker push "${{ steps.plan.outputs.backend_image }}"
-          docker build --pull -t "${{ steps.plan.outputs.frontend_image }}" aitm-source/front
+          docker build --pull --label "org.opencontainers.image.revision=${{ steps.plan.outputs.source_sha }}" -t "${{ steps.plan.outputs.frontend_image }}" aitm-source/front
           docker push "${{ steps.plan.outputs.frontend_image }}"
 
       - name: Detect SSH configuration
-        id: ssh
         shell: bash
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -79,12 +79,10 @@ jobs:
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
         run: |
           set -euo pipefail
-          available=false
-          if [ -n "$SERVER_HOST" ] && [ -n "$SERVER_USER" ] && { [ -n "$SERVER_SSH_KEY" ] || [ -n "$SERVER_PASSWORD" ]; }; then
-            available=true
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || { [ -z "$SERVER_SSH_KEY" ] && [ -z "$SERVER_PASSWORD" ]; }; then
+            echo "Aitm deployment requires SERVER_HOST, SERVER_USER and an SSH key or password." >&2
+            exit 1
           fi
-          echo "available=$available" >> "$GITHUB_OUTPUT"
-          [ "$available" = true ]
 
       - name: Pull images and deploy Aitm on mini PC
         shell: bash
@@ -121,6 +119,7 @@ jobs:
 
           cat > "$RUNNER_TEMP/aitm-ghcr-remote.ps1" <<'PWSH'
           $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
           $serverPath = 'C:\home\server\app'
           New-Item -ItemType Directory -Force -Path (Split-Path $serverPath -Parent) | Out-Null
           if (-not (Test-Path (Join-Path $serverPath '.git'))) {
@@ -129,12 +128,15 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'Server clone failed' }
           }
           Set-Location $serverPath
+          git reset --hard HEAD
+          git clean -fd
           git fetch --prune origin main
           if ($LASTEXITCODE -ne 0) { throw 'Server fetch failed' }
           git checkout -B main origin/main
           if ($LASTEXITCODE -ne 0) { throw 'Server checkout failed' }
           git reset --hard '${{ steps.plan.outputs.server_sha }}'
           if ($LASTEXITCODE -ne 0) { throw 'Server revision checkout failed' }
+          git clean -fd
 
           $images = @(
               @('${{ steps.plan.outputs.ai_image }}', 'aitm-production-ai:latest'),

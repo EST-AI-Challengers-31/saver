@@ -1,5 +1,5 @@
-run_id=32950441750
+run_id=32955290240
 service=aitm
 ssh_available=true
-remote_exit_code=0
+remote_exit_code=1
 deployment=failure

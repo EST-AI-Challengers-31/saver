@@ -1,43 +1,55 @@
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback } from "react";
 
-import { LoginScreen } from "@/pages/LoginScreen"
-import { UploadScreen } from "@/pages/UploadScreen"
-import { LoadingScreen } from "@/pages/LoadingScreen"
-import { DetailScreen } from "@/pages/DetailScreen"
-import { ParentGuideScreen } from "@/pages/ParentGuideScreen"
+import { LoginScreen } from "@/pages/LoginScreen";
+import { UploadScreen } from "@/pages/UploadScreen";
+import { LoadingScreen } from "@/pages/LoadingScreen";
+import { DetailScreen } from "@/pages/DetailScreen";
+import { ParentGuideScreen } from "@/pages/ParentGuideScreen";
 
-import svgUpload from "@/imports/UploadInitialScreen/svg-wqv28lyrjs"
-import svgDanger from "@/imports/ResultDangerScreen/svg-eijb8y654a"
-import svgDetail from "@/imports/DetailScreen/svg-8kiebeh0qh"
-import svgFailed from "@/imports/AnalysisFailedScreen/svg-77kkukwlrq"
+import { analyzeImage, AnalyzeResponse } from "@/api/analyze";
 
-import imgHeaderLogo from "@/imports/image-4.png"
-import imgSymbol from "@/imports/image-5.png"
+import svgUpload from "@/imports/UploadInitialScreen/svg-wqv28lyrjs";
+import svgDanger from "@/imports/ResultDangerScreen/svg-eijb8y654a";
+import svgDetail from "@/imports/DetailScreen/svg-8kiebeh0qh";
+import svgFailed from "@/imports/AnalysisFailedScreen/svg-77kkukwlrq";
+
+import imgHeaderLogo from "@/imports/image-4.png";
+import imgSymbol from "@/imports/image-5.png";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Verdict = "danger" | "caution" | "uncertain"
-type Screen = "login" | "upload" | "loading" | "result" | "detail" | "parentGuide" | "failed" | "serviceIntro"
-type ModalType = "terms" | "privacy" | "menu" | null
+type Verdict = "danger" | "caution" | "uncertain";
+type Screen =
+  | "login"
+  | "upload"
+  | "loading"
+  | "result"
+  | "detail"
+  | "parentGuide"
+  | "failed"
+  | "serviceIntro";
+type ModalType = "terms" | "privacy" | "menu" | null;
 
-// ── Mock analysis ─────────────────────────────────────────────────────────────
+// ── Analysis result ─────────────────────────────────────────────────────────────
 interface AnalysisResult {
-  verdict: Verdict
-  similarity: number
-  similarCount: number
+  verdict: Verdict;
+  similarity: number;
+  similarCount: number;
 }
 
-function getMockResult(name: string): AnalysisResult | null {
-  if (name.includes("실패") || name.includes("오류")) return null
-  switch (name.trim()) {
-    case "가짜은행 보안앱":
-      return { verdict: "danger", similarity: 94, similarCount: 3 }
-    case "스마트뱅킹 보안":
-      return { verdict: "caution", similarity: 76, similarCount: 2 }
-    case "우리집 가계부":
-      return { verdict: "uncertain", similarity: 42, similarCount: 0 }
-    default:
-      return { verdict: "uncertain", similarity: 35, similarCount: 0 }
-  }
+// AI 서버 응답(AnalyzeResponse)을 화면에서 쓰는 AnalysisResult 형태로 변환
+// TODO: 실제 AI 서버 응답에 risk_level/similarity 등의 필드가 추가되면 그에 맞춰 매핑 로직 수정
+function mapApiResultToAnalysisResult(
+  api: AnalyzeResponse,
+): AnalysisResult | null {
+  if (!api.results || api.results.length === 0) return null;
+
+  // 임시: 첫 번째 결과만 사용, verdict는 uncertain으로 고정
+  // 백엔드/AI 응답에 위험도(risk_level 등) 필드가 추가되면 아래 매핑을 교체
+  return {
+    verdict: "uncertain",
+    similarity: 0,
+    similarCount: api.results.length,
+  };
 }
 
 // ── Verdict config ────────────────────────────────────────────────────────────
@@ -128,20 +140,7 @@ const VC = {
     guideSub: "그래도 모르는 앱이면 삭제하셔도 좋아요.",
     guideDelete: (n: string) => `설정 → 앱 → ${n}에서 앱 정보를 확인해보세요.`,
   },
-}
-
-function generateGuideText(appName: string, verdict: Verdict): string {
-  const v = VC[verdict]
-  return [
-    `엄마, 아빠! 폰에 깔린 '${appName}'이라는 앱 확인해봤어요.`,
-    "",
-    `검사해 보니 ${v.guideVerb}. ${v.guideSub}`,
-    "",
-    `⚠️ ${v.guideDelete(appName)}`,
-    "",
-    "혹시 어려우시면 저한테 전화 주세요. 제가 도와드릴게요!",
-  ].join("\n")
-}
+};
 
 // ── Legal content ─────────────────────────────────────────────────────────────
 const TERMS_CONTENT = `제1조 (목적)
@@ -162,13 +161,13 @@ const TERMS_CONTENT = `제1조 (목적)
 제6조 (약관의 변경)
 본 약관은 필요에 따라 변경될 수 있으며, 변경된 약관은 서비스 내 공지를 통해 안내됩니다.
 
-⚠️ 본 약관은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`
+⚠️ 본 약관은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`;
 
 const PRIVACY_CONTENT = `1. 수집하는 개인정보
 본 서비스는 다음의 개인정보를 수집합니다.
-• 카카오 계정 정보 (이름, 프로필 이미지, 이메일)
 • 앱 분석을 위해 업로드한 이미지
 • 서비스 이용 기록 및 접속 로그
+• 사용자가 직접 입력한 앱 정보
 
 2. 개인정보 이용 목적
 수집된 정보는 다음 목적으로만 활용됩니다.
@@ -189,22 +188,21 @@ const PRIVACY_CONTENT = `1. 수집하는 개인정보
 성명: 닿음 운영팀
 이메일: privacy@dateum.app
 
-⚠️ 본 방침은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`
+⚠️ 본 방침은 프로토타입 데모용으로 작성된 내용이며 법적 효력이 없습니다.`;
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 function LegalModal({
   type,
   onClose,
 }: {
-  type: "terms" | "privacy"
-  onClose: () => void
+  type: "terms" | "privacy";
+  onClose: () => void;
 }) {
-  const title = type === "terms" ? "이용약관" : "개인정보처리방침"
-  const content = type === "terms" ? TERMS_CONTENT : PRIVACY_CONTENT
+  const title = type === "terms" ? "이용약관" : "개인정보처리방침";
+  const content = type === "terms" ? TERMS_CONTENT : PRIVACY_CONTENT;
 
   return (
     <div className="absolute inset-0 z-50 bg-[#f8fafb] flex flex-col">
-      {/* Header */}
       <div className="bg-white flex h-[56px] items-center gap-[12px] px-[24px] shrink-0">
         <button
           onClick={onClose}
@@ -224,18 +222,16 @@ function LegalModal({
         </p>
       </div>
       <div aria-hidden className="border-b border-[#e2e8f0]" />
-      {/* Content */}
       <div className="flex-1 overflow-y-auto px-[24px] py-[20px]">
         <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[14px] whitespace-pre-wrap">
           {content}
         </p>
       </div>
-      {/* Home indicator */}
       <div className="flex items-start justify-center py-[12px] w-full shrink-0">
         <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
       </div>
     </div>
-  )
+  );
 }
 
 function MenuSheet({
@@ -244,10 +240,10 @@ function MenuSheet({
   onShowPrivacy,
   onShowServiceIntro,
 }: {
-  onClose: () => void
-  onShowTerms: () => void
-  onShowPrivacy: () => void
-  onShowServiceIntro: () => void
+  onClose: () => void;
+  onShowTerms: () => void;
+  onShowPrivacy: () => void;
+  onShowServiceIntro: () => void;
 }) {
   const Chevron = () => (
     <svg fill="none" height="18" viewBox="0 0 18 18" width="18">
@@ -258,19 +254,15 @@ function MenuSheet({
         strokeWidth="1.5"
       />
     </svg>
-  )
+  );
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      {/* Sheet */}
       <div className="relative bg-white rounded-t-[24px]">
-        {/* Drag handle */}
         <div className="flex justify-center pt-[12px] pb-[4px]">
           <div className="bg-[#e2e8f0] rounded-full h-[4px] w-[36px]" />
         </div>
-        {/* Header */}
         <div className="flex items-center justify-between px-[24px] py-[16px]">
           <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[18px]">
             메뉴
@@ -290,7 +282,6 @@ function MenuSheet({
           </button>
         </div>
         <div className="mx-[24px] h-px bg-[#f1f5f9]" />
-        {/* Menu items */}
         <button
           onClick={onShowServiceIntro}
           className="flex items-center justify-between w-full px-[24px] py-[18px]"
@@ -391,16 +382,13 @@ function MenuSheet({
             닿음 v1.0.0 (프로토타입)
           </p>
         </div>
-        {/* Home indicator */}
         <div className="flex items-start justify-center py-[12px]">
           <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
         </div>
       </div>
     </div>
-  )
+  );
 }
-
-// ── Shared components ─────────────────────────────────────────────────────────
 
 function StatusBar() {
   return (
@@ -448,7 +436,7 @@ function StatusBar() {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function HomeIndicator() {
@@ -456,15 +444,15 @@ function HomeIndicator() {
     <div className="flex items-start justify-center py-[12px] w-full">
       <div className="bg-[#0f172a] h-[5px] rounded-[100px] w-[134px]" />
     </div>
-  )
+  );
 }
 
 function BrandHeader({
   onMenuOpen,
   onLogoClick,
 }: {
-  onMenuOpen: () => void
-  onLogoClick?: () => void
+  onMenuOpen: () => void;
+  onLogoClick?: () => void;
 }) {
   return (
     <div className="bg-white content-stretch flex h-[56px] items-center justify-between px-[24px] relative shrink-0 w-full">
@@ -500,68 +488,9 @@ function BrandHeader({
         </svg>
       </button>
     </div>
-  )
+  );
 }
 
-function BackHeader({
-  title,
-  onBack,
-  onMenuOpen,
-}: {
-  title: string
-  onBack: () => void
-  onMenuOpen: () => void
-}) {
-  return (
-    <div className="bg-white content-stretch flex h-[56px] items-center justify-between px-[24px] relative shrink-0 w-full">
-      <div className="flex gap-[12px] items-center">
-        <button
-          onClick={onBack}
-          className="flex items-center justify-center shrink-0 size-[24px]"
-        >
-          <svg
-            className="block size-full"
-            fill="none"
-            height="24"
-            viewBox="0 0 24 24"
-            width="24"
-          >
-            <path
-              d="M15 18L9 12L15 6"
-              stroke="#1B3A5C"
-              strokeLinecap="round"
-              strokeWidth="2"
-            />
-          </svg>
-        </button>
-        <p className="font-['Pretendard'] font-bold leading-[normal] shrink-0 text-[#1b3a5c] text-[18px] whitespace-nowrap">
-          {title}
-        </p>
-      </div>
-      <button
-        onClick={onMenuOpen}
-        className="flex flex-col items-center justify-center shrink-0 size-[24px]"
-      >
-        <svg
-          className="block size-full"
-          fill="none"
-          height="24"
-          viewBox="0 0 24 24"
-          width="24"
-        >
-          <path
-            d={svgDetail.p15b88b00}
-            stroke="#1B3A5C"
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      </button>
-    </div>
-  )
-}
-
-// ── Screen 4: Result (all verdicts) ──────────────────────────────────────────
 function ResultScreen({
   appName,
   result,
@@ -571,60 +500,18 @@ function ResultScreen({
   onMenuOpen,
   onLogoClick,
 }: {
-  appName: string
-  result: AnalysisResult
-  onDetail: () => void
-  onGuide: () => void
-  onAnalyzeAnother: () => void
-  onMenuOpen: () => void
-  onLogoClick: () => void
+  appName: string;
+  result: AnalysisResult;
+  onDetail: () => void;
+  onGuide: () => void;
+  onAnalyzeAnother: () => void;
+  onMenuOpen: () => void;
+  onLogoClick: () => void;
 }) {
-  const v = VC[result.verdict]
-  const isDanger = result.verdict === "danger"
-  const isCaution = result.verdict === "caution"
-  const isUncertain = result.verdict === "uncertain"
-
-  const BadgeIcon = () => {
-    if (isDanger)
-      return (
-        <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-          <path
-            d={svgDanger.p119e80b0}
-            stroke={v.badgeText}
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      )
-    if (isCaution)
-      return (
-        <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-          <path
-            d="M10 3.5L18.1 17H1.9L10 3.5Z"
-            stroke={v.badgeText}
-            strokeLinejoin="round"
-            strokeWidth="2"
-          />
-          <path
-            d="M10 9v3M10 13.5v.5"
-            stroke={v.badgeText}
-            strokeLinecap="round"
-            strokeWidth="2"
-          />
-        </svg>
-      )
-    return (
-      <svg className="size-[20px]" fill="none" viewBox="0 0 20 20">
-        <circle cx="10" cy="10" r="8" stroke={v.badgeText} strokeWidth="2" />
-        <path
-          d="M10 7v4M10 13v.5"
-          stroke={v.badgeText}
-          strokeLinecap="round"
-          strokeWidth="2"
-        />
-      </svg>
-    )
-  }
+  const v = VC[result.verdict];
+  const isDanger = result.verdict === "danger";
+  const isCaution = result.verdict === "caution";
+  const isUncertain = result.verdict === "uncertain";
 
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
@@ -640,7 +527,6 @@ function ResultScreen({
                 border: `1px solid ${v.badgeBorder}`,
               }}
             >
-              <BadgeIcon />
               <p
                 className="font-['Pretendard'] font-bold text-[14px] whitespace-nowrap"
                 style={{ color: v.badgeText }}
@@ -684,39 +570,6 @@ function ResultScreen({
               </div>
             </div>
           </div>
-          <div className="bg-white flex flex-col gap-[14px] p-[20px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#ebeff3] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              분석된 앱 정보
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[14px]">
-              앱 이름: {appName}
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[13px]">
-              유사 악성 앱: {result.similarCount}건
-            </p>
-            <p className="font-['Pretendard'] font-semibold text-[#1b3a5c] text-[13px]">
-              분석 기준: 알약 모바일 악성코드 탐지 데이터
-            </p>
-          </div>
-          <div className="bg-white flex flex-col gap-[6px] p-[16px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#ebeff3] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              {v.riskLabel}
-            </p>
-            <p
-              className="font-['Pretendard'] font-semibold text-[13px]"
-              style={{ color: v.riskColor }}
-            >
-              {v.riskValue}
-            </p>
-          </div>
         </div>
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
@@ -728,27 +581,6 @@ function ResultScreen({
               background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)",
             }}
           >
-            <svg
-              className="block size-[18px]"
-              fill="none"
-              height="18"
-              viewBox="0 0 18 18"
-              width="18"
-            >
-              <g clipPath="url(#clip-send)">
-                <path
-                  d={svgDanger.p3df57c00}
-                  stroke="white"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-              </g>
-              <defs>
-                <clipPath id="clip-send">
-                  <rect fill="white" height="18" width="18" />
-                </clipPath>
-              </defs>
-            </svg>
             <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">
               부모님께 안내문 보내기
             </p>
@@ -758,10 +590,6 @@ function ResultScreen({
               onClick={onDetail}
               className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full"
             >
-              <div
-                aria-hidden
-                className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[14px]"
-              />
               <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">
                 상세 정보 보기
               </p>
@@ -771,10 +599,6 @@ function ResultScreen({
             onClick={onAnalyzeAnother}
             className="bg-white flex h-[42px] items-center justify-center relative rounded-[12px] w-full"
           >
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[12px]"
-            />
             <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] whitespace-nowrap">
               다른 앱 분석하기
             </p>
@@ -783,321 +607,124 @@ function ResultScreen({
         <HomeIndicator />
       </div>
     </div>
-  )
+  );
 }
 
-// ── Screen 7: Analysis Failed ─────────────────────────────────────────────────
 function FailedScreen({
   onSelectImage,
   onTypeAppName,
   onMenuOpen,
   onLogoClick,
-}: {
-  onSelectImage: () => void
-  onTypeAppName: () => void
-  onMenuOpen: () => void
-  onLogoClick: () => void
-}) {
+}: any) {
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full min-h-full">
       <div className="flex flex-col w-full">
         <StatusBar />
         <BrandHeader onMenuOpen={onMenuOpen} onLogoClick={onLogoClick} />
         <div className="flex flex-col gap-[24px] items-center p-[24px] w-full">
-          <div className="bg-white flex items-center justify-center relative rounded-[60px] size-[120px]">
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[60px]"
-            />
-            <div className="bg-[#fff1f1] flex items-center justify-center rounded-[32px] size-[64px]">
-              <svg fill="none" height="32" viewBox="0 0 32 32" width="32">
-                <path
-                  d={svgFailed.p311ec080}
-                  stroke="#FF5C5C"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                />
-              </svg>
-            </div>
-          </div>
-          <div className="flex flex-col gap-[8px] items-center text-center w-full">
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px] whitespace-nowrap">
-              분석에 실패했어요
-            </p>
-            <p className="font-['Pretendard'] font-normal leading-[1.4] text-[#64748b] text-[14px] w-full">
-              이미지를 인식하지 못했거나 일시적인 오류가 발생했어요
-            </p>
-          </div>
-          <div className="bg-white flex flex-col gap-[14px] p-[20px] relative rounded-[16px] w-full">
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[16px]"
-            />
-            <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[14px] whitespace-nowrap">
-              이런 경우일 수 있어요
-            </p>
-            {[
-              "이미지가 흐리거나 잘린 경우",
-              "텍스트가 포함되지 않은 이미지",
-              "서버 연결이 불안정한 경우",
-            ].map((reason) => (
-              <div key={reason} className="flex gap-[10px] items-center w-full">
-                <div className="bg-[#FF5C5C] rounded-[3px] shrink-0 size-[6px]" />
-                <p className="font-['Pretendard'] font-medium text-[#1b3a5c] text-[13px]">
-                  {reason}
-                </p>
-              </div>
-            ))}
-          </div>
+          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[22px]">
+            분석에 실패했어요
+          </p>
         </div>
       </div>
       <div className="flex flex-col gap-[12px] pb-[8px] px-[24px] shrink-0 w-full">
-        <div className="flex flex-col gap-[8px] w-full">
-          {/* Primary: select a different image */}
-          <button
-            onClick={onSelectImage}
-            className="flex h-[54px] items-center justify-center rounded-[14px] w-full"
-            style={{
-              background: "linear-gradient(90deg, #4F8CFF 0%, #7B6CFF 100%)",
-            }}
-          >
-            <p className="font-['Pretendard'] font-bold text-[16px] text-white whitespace-nowrap">
-              다른 이미지 선택
-            </p>
-          </button>
-          {/* Secondary: type app name directly (focuses input) */}
-          <button
-            onClick={onTypeAppName}
-            className="bg-white flex h-[50px] items-center justify-center relative rounded-[14px] w-full"
-          >
-            <div
-              aria-hidden
-              className="absolute border border-[#e2e8f0] border-solid inset-0 pointer-events-none rounded-[14px]"
-            />
-            <p className="font-['Pretendard'] font-semibold text-[#64748b] text-[14px] whitespace-nowrap">
-              앱 이름 직접 입력하기
-            </p>
-          </button>
-        </div>
+        <button
+          onClick={onSelectImage}
+          className="flex h-[54px] items-center justify-center rounded-[14px] w-full bg-blue-500 text-white"
+        >
+          다른 이미지 선택
+        </button>
         <HomeIndicator />
       </div>
     </div>
-  )
+  );
 }
 
-// ── Screen: Service Intro ─────────────────────────────────────────────────────
 function ServiceIntroScreen({ onBack }: { onBack: () => void }) {
-  const values = [
-    {
-      color: "#4F8CFF",
-      label: "신뢰",
-      desc: "검증된 보안 데이터 기반의 정확한 분석",
-    },
-    {
-      color: "#7B6CFF",
-      label: "연결",
-      desc: "자녀와 부모님을 잇는 따뜻한 알림",
-    },
-    {
-      color: "#FF8F8F",
-      label: "따뜻함",
-      desc: "누구나 이해하기 쉬운 친절한 안내",
-    },
-  ]
-
   return (
     <div className="bg-[#f8fafb] flex flex-col relative w-full min-h-full">
       <StatusBar />
-      {/* Header */}
       <div className="bg-white flex h-[56px] items-center gap-[12px] px-[24px] shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center justify-center size-[24px]"
-        >
-          <svg fill="none" height="24" viewBox="0 0 24 24" width="24">
-            <path
-              d="M15 18L9 12L15 6"
-              stroke="#1B3A5C"
-              strokeLinecap="round"
-              strokeWidth="2"
-            />
-          </svg>
-        </button>
-        <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[18px]">
-          서비스 소개
-        </p>
+        <button onClick={onBack}>뒤로가기</button>
+        <p>서비스 소개</p>
       </div>
-      <div aria-hidden className="border-b border-[#e2e8f0]" />
-
-      <div className="flex-1 overflow-y-auto">
-        {/* Hero */}
-        <div className="flex flex-col gap-[6px] items-center px-[24px] pt-[40px] pb-[32px] w-full">
-          <img
-            src={imgSymbol}
-            alt="닿음 로고 심볼"
-            className="w-[72px] h-[72px] object-contain"
-          />
-          <p className="font-['Pretendard'] font-extrabold text-[#1b3a5c] text-[26px] leading-[33.8px] text-center whitespace-nowrap">
-            마음도 · 안전도 · 닿다
-          </p>
-          <p className="font-['Pretendard'] font-medium text-[#64748b] text-[13px] text-center pt-[4px]">
-            닿음 — 디지털 보안 케어 서비스
-          </p>
-        </div>
-
-        {/* Description card */}
-        <div className="mx-[24px] mb-[24px] bg-white rounded-[20px] p-[24px] relative">
-          <div
-            aria-hidden
-            className="absolute inset-0 border border-[#e2e8f0] rounded-[20px] pointer-events-none"
-          />
-          <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[15px]">
-            <span className="font-bold text-[#1b3a5c]">닿음</span>은 자녀와
-            부모의 마음이 이어지고, 위험 알림이 행동으로 닿도록 돕는 디지털 보안
-            케어 서비스입니다.
-          </p>
-          <div className="mt-[16px] h-px bg-[#f1f5f9]" />
-          <p className="font-['Pretendard'] font-normal leading-[1.8] text-[#334155] text-[15px] mt-[16px]">
-            부모님이 보내주신 앱 화면이나 앱 이름을 분석해 위험 가능성을
-            확인하고, 이해하기 쉬운 안내문으로 전달할 수 있도록 도와드려요.
-          </p>
-        </div>
-
-        {/* How it works */}
-        <div className="mx-[24px] mb-[24px]">
-          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[15px] mb-[12px]">
-            이렇게 사용해요
-          </p>
-          <div className="flex flex-col gap-[10px]">
-            {[
-              { step: "01", label: "앱 화면 업로드 또는 앱 이름 입력" },
-              { step: "02", label: "AI가 악성 앱 데이터베이스와 비교 분석" },
-              { step: "03", label: "위험도 결과 확인 및 부모님께 안내문 전달" },
-            ].map(({ step, label }) => (
-              <div
-                key={step}
-                className="bg-white flex items-center gap-[16px] px-[18px] py-[14px] rounded-[14px] relative"
-              >
-                <div
-                  aria-hidden
-                  className="absolute inset-0 border border-[#e2e8f0] rounded-[14px] pointer-events-none"
-                />
-                <span className="font-['Inter'] font-bold text-[#4F8CFF] text-[13px] shrink-0 w-[20px]">
-                  {step}
-                </span>
-                <p className="font-['Pretendard'] font-medium text-[#1b3a5c] text-[14px]">
-                  {label}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Values */}
-        <div className="mx-[24px] mb-[32px]">
-          <p className="font-['Pretendard'] font-bold text-[#1b3a5c] text-[15px] mb-[12px]">
-            닿음이 지키는 가치
-          </p>
-          <div className="flex flex-col gap-[10px]">
-            {values.map(({ color, label, desc }) => (
-              <div
-                key={label}
-                className="bg-white flex items-center gap-[16px] px-[18px] py-[16px] rounded-[16px] relative"
-              >
-                <div
-                  aria-hidden
-                  className="absolute inset-0 rounded-[16px] pointer-events-none"
-                  style={{ border: `1.5px solid ${color}33` }}
-                />
-                <div
-                  className="flex items-center justify-center size-[42px] rounded-[14px] shrink-0"
-                  style={{ backgroundColor: color + "18" }}
-                >
-                  <div
-                    className="size-[14px] rounded-full"
-                    style={{ backgroundColor: color }}
-                  />
-                </div>
-                <div className="flex flex-col gap-[2px]">
-                  <p
-                    className="font-['Pretendard'] font-bold text-[14px]"
-                    style={{ color }}
-                  >
-                    {label}
-                  </p>
-                  <p className="font-['Pretendard'] font-normal text-[#64748b] text-[12px]">
-                    {desc}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
       <HomeIndicator />
     </div>
-  )
+  );
 }
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("login")
-  const [appName, setAppName] = useState("")
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [result, setResult] = useState<AnalysisResult | null>(null)
-  const [modal, setModal] = useState<ModalType>(null)
-  const [focusAppName, setFocusAppName] = useState(false)
+  const [screen, setScreen] = useState<Screen>("login");
+  const [appName, setAppName] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
+  const [modal, setModal] = useState<ModalType>(null);
+  const [focusAppName, setFocusAppName] = useState(false);
 
-  const openMenu = useCallback(() => setModal("menu"), [])
-  const openTerms = useCallback(() => setModal("terms"), [])
-  const openPrivacy = useCallback(() => setModal("privacy"), [])
-  const closeModal = useCallback(() => setModal(null), [])
+  const openMenu = useCallback(() => setModal("menu"), []);
+  const openTerms = useCallback(() => setModal("terms"), []);
+  const openPrivacy = useCallback(() => setModal("privacy"), []);
+  const closeModal = useCallback(() => setModal(null), []);
   const openServiceIntro = useCallback(() => {
-    setModal(null)
-    setScreen("serviceIntro")
-  }, [])
+    setModal(null);
+    setScreen("serviceIntro");
+  }, []);
 
-  const handleAnalyze = useCallback((name: string, img: string | null) => {
-    setAppName(name)
-    setImageUrl(img)
-    setScreen("loading")
-  }, [])
+  // 이미지가 있으면 실제 AI 서버(/api/analyze)를 호출하고,
+  // 이미지 없이 이름만 입력한 경우엔 결과 없이 loading -> failed로 처리
+  const handleAnalyze = useCallback(
+    async (name: string, img: string | null, imageFile: File | null) => {
+      setAppName(name);
+      setImageUrl(img);
+      setApiResult(null);
+      setScreen("loading");
+
+      if (!imageFile) {
+        // 이미지가 없는 경우: 현재는 분석 불가로 처리
+        setScreen("failed");
+        return;
+      }
+
+      try {
+        const data = await analyzeImage(imageFile);
+        setApiResult(data);
+      } catch (err) {
+        console.error("분석 요청 실패:", err);
+        setScreen("failed");
+      }
+    },
+    [],
+  );
 
   const handleLoadingDone = useCallback(() => {
-    const r = getMockResult(appName)
-    if (!r) {
-      setScreen("failed")
-    } else {
-      setResult(r)
-      setScreen("result")
+    if (!apiResult) {
+      setScreen("failed");
+      return;
     }
-  }, [appName])
+
+    const mapped = mapApiResultToAnalysisResult(apiResult);
+    if (!mapped) {
+      setScreen("failed");
+    } else {
+      setResult(mapped);
+      setScreen("result");
+    }
+  }, [apiResult]);
 
   const resetAndGoToUpload = useCallback(() => {
-    setAppName("")
-    setImageUrl(null)
-    setResult(null)
-    setFocusAppName(false)
-    setScreen("upload")
-  }, [])
+    setAppName("");
+    setImageUrl(null);
+    setResult(null);
+    setApiResult(null);
+    setFocusAppName(false);
+    setScreen("upload");
+  }, []);
 
-  const failedSelectImage = useCallback(() => {
-    setImageUrl(null)
-    setFocusAppName(false)
-    setScreen("upload")
-  }, [])
-
-  const failedTypeAppName = useCallback(() => {
-    setImageUrl(null)
-    setFocusAppName(true)
-    setScreen("upload")
-  }, [])
-
-  // Reset focusAppName after screen changes away from upload
   useEffect(() => {
-    if (screen !== "upload") setFocusAppName(false)
-  }, [screen])
+    if (screen !== "upload") setFocusAppName(false);
+  }, [screen]);
 
   return (
     <div
@@ -1106,10 +733,7 @@ export default function App() {
     >
       <div
         className="relative bg-[#f8fafb] w-full flex flex-col"
-        style={{
-          maxWidth: 430,
-          height: "100dvh",
-        }}
+        style={{ maxWidth: 430, height: "100dvh" }}
       >
         {screen === "login" && (
           <LoginScreen
@@ -1165,8 +789,8 @@ export default function App() {
         )}
         {screen === "failed" && (
           <FailedScreen
-            onSelectImage={failedSelectImage}
-            onTypeAppName={failedTypeAppName}
+            onSelectImage={() => setScreen("upload")}
+            onTypeAppName={() => setScreen("upload")}
             onMenuOpen={openMenu}
             onLogoClick={resetAndGoToUpload}
           />
@@ -1175,7 +799,6 @@ export default function App() {
           <ServiceIntroScreen onBack={() => setScreen("upload")} />
         )}
 
-        {/* Menu sheet */}
         {modal === "menu" && (
           <MenuSheet
             onClose={closeModal}
@@ -1185,11 +808,10 @@ export default function App() {
           />
         )}
 
-        {/* Legal modals */}
         {(modal === "terms" || modal === "privacy") && (
           <LegalModal type={modal} onClose={closeModal} />
         )}
       </div>
     </div>
-  )
+  );
 }

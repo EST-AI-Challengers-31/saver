@@ -15,39 +15,17 @@ function LoginStatusBar() {
       </p>
       <div className="flex gap-[6px] items-center">
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgLogin.pc062070}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgLogin.pc062070} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="relative shrink-0 size-[18px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 18 18"
-          >
-            <path
-              clipRule="evenodd"
-              d={svgLogin.p23837e00}
-              fill="#0F172A"
-              fillRule="evenodd"
-            />
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 18">
+            <path clipRule="evenodd" d={svgLogin.p23837e00} fill="#0F172A" fillRule="evenodd" />
           </svg>
         </div>
         <div className="h-[18px] relative shrink-0 w-[26px]">
-          <svg
-            className="absolute block inset-0 size-full"
-            fill="none"
-            viewBox="0 0 26 18"
-          >
+          <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 26 18">
             <path d={svgLogin.p1f206500} fill="#0F172A" />
           </svg>
         </div>
@@ -69,6 +47,7 @@ export function LoginScreen({
   onShowTerms,
   onShowPrivacy,
 }: LoginScreenProps) {
+
   return (
     <div className="bg-[#f8fafb] flex flex-col items-start justify-between relative w-full h-full min-h-0">
       <div className="flex flex-col items-start w-full">
@@ -101,20 +80,10 @@ export function LoginScreen({
         <div className="flex flex-col gap-[16px] w-full">
           <button
             onClick={onNext}
-            className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full"
+            className="bg-[#fee500] flex gap-[12px] h-[54px] items-center justify-center px-[16px] relative rounded-[14px] w-full cursor-pointer hover:bg-[#fdd835] transition-all"
           >
-            <svg
-              className="shrink-0 size-[22px]"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path
-                d="M12 2.5C6.2 2.5 1.5 6.55 1.5 11.6c0 3.25 2.05 6.1 5.15 7.8l-1.05 3.8 3.8-2.1c.85.15 1.7.2 2.6.2 5.8 0 10.5-4.05 10.5-9.1S17.8 2.5 12 2.5z"
-                fill="#181600"
-              />
-            </svg>
             <p className="font-['Pretendard'] font-bold leading-[normal] shrink-0 text-[#181600] text-[16px] whitespace-nowrap">
-              카카오톡으로 계속하기
+              시작하기
             </p>
           </button>
           <p className="font-['Inter'] font-normal leading-[normal] shrink-0 text-[#64748b] text-[11px] text-center w-full">

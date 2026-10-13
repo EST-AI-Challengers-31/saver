@@ -1,0 +1,79 @@
+name: Inspect Maple deployment readiness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/maple-readiness.yml"
+      - ".ops-trigger/maple-check.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maple-deployment-readiness
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check Maple host prerequisites through existing saver SSH
+        shell: bash
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || { [ -z "$SERVER_SSH_KEY" ] && [ -z "$SERVER_PASSWORD" ]; }; then
+            echo 'Deployment gateway credentials are missing.' >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+          port="${SERVER_PORT:-22}"
+          key_args=()
+          if [ -n "$SERVER_SSH_KEY" ]; then
+            printf '%s\n' "$SERVER_SSH_KEY" > "$HOME/.ssh/maple_readiness_key"
+            chmod 600 "$HOME/.ssh/maple_readiness_key"
+            key_args=(-i "$HOME/.ssh/maple_readiness_key")
+          fi
+          if [ -n "$SERVER_PASSWORD" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sshpass
+            export SSHPASS="$SERVER_PASSWORD"
+            auth=(sshpass -e ssh "${key_args[@]}")
+          else
+            auth=(ssh "${key_args[@]}")
+          fi
+          ssh_options=(-o BatchMode=no -o NumberOfPasswordPrompts=1 -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+          cat > "$RUNNER_TEMP/maple-inspect.ps1" <<'PWSH'
+          $ErrorActionPreference = 'Stop'
+          $InformationPreference = 'SilentlyContinue'
+          [Console]::Out.WriteLine('[maple] read-only readiness probe')
+          [Console]::Out.WriteLine('[maple] machine has data drive: ' + (Test-Path 'D:\'))
+          [Console]::Out.WriteLine('[maple] cloudflared installed: ' + [bool](Get-Command cloudflared -ErrorAction SilentlyContinue))
+          [Console]::Out.WriteLine('[maple] docker cli installed: ' + [bool](Get-Command docker -ErrorAction SilentlyContinue))
+          if (Test-Path 'D:\') {
+            $drive = Get-PSDrive -Name D -ErrorAction SilentlyContinue
+            if ($drive) { [Console]::Out.WriteLine('[maple] D free GiB: ' + [math]::Round($drive.Free / 1GB, 1)) }
+          }
+          foreach ($port in @(18080, 18081, 19080, 9070, 80, 443)) {
+            try {
+              $listening = [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1)
+              [Console]::Out.WriteLine("[maple] port ${port} occupied: $listening")
+            } catch {
+              [Console]::Out.WriteLine("[maple] port ${port} inspection unavailable")
+            }
+          }
+          foreach ($path in @('D:\server-data\maple', 'C:\home\server\sources\maple')) {
+            [Console]::Out.WriteLine("[maple] path exists: $([IO.Path]::GetFileName($path)) = $(Test-Path $path)")
+          }
+          [Console]::Out.WriteLine('[maple] readiness probe done')
+          PWSH
+          wrapper='$writer = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput()); $writer.AutoFlush = $true; [Console]::SetOut($writer); $script = [Console]::In.ReadToEnd(); Invoke-Expression $script'
+          encoded_wrapper="$(printf '%s' "$wrapper" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)"
+          timeout 150s "${auth[@]}" -p "$port" "${ssh_options[@]}" "$SERVER_USER@$SERVER_HOST" "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded_wrapper" < "$RUNNER_TEMP/maple-inspect.ps1"
